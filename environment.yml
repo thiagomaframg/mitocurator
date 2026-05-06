@@ -1,0 +1,22 @@
+name: mitocurator
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - biopython
+  - pandas
+  - numpy
+  - pyyaml
+  - jinja2
+  - matplotlib
+  - minimap2
+  - samtools
+  - bcftools
+  - blast
+  - mafft
+  - seqkit
+  - bedtools
+  - arwen
+  - trnascan-se

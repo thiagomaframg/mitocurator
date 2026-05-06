@@ -1,0 +1,47 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# MitoCurator runtime outputs
+*_output/
+mitocurator_output/
+00_logs/
+01_input/
+02_reference/
+03_preliminary_annotation/
+04_rotation/
+05_annotation_comparison/
+06_read_mapping/
+07_gene_qc/
+08_circularity/
+09_control_region/
+10_final_reports/
+11_review_files/
+
+# Large bioinformatics files
+*.bam
+*.bai
+*.sam
+*.fastq
+*.fq
+*.fastq.gz
+*.fq.gz
+*.fasta
+*.fa
+*.fna
+*.gb
+*.gbk
+*.vcf
+*.vcf.gz
+*.bt2
+*.mmi
+
+# User config with absolute paths
+config.yaml

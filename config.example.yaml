@@ -1,0 +1,94 @@
+# MitoCurator configuration file
+#
+# IMPORTANT:
+# Always use absolute/full paths for input files, references, reads,
+# external tools and output directories.
+#
+# IMPORTANTE:
+# Use sempre caminhos completos/absolutos para arquivos de entrada,
+# referências, reads, ferramentas externas e diretórios de saída.
+#
+# Evite caminhos relativos, pois o pipeline cria subdiretórios internos
+# e algumas ferramentas externas podem ser chamadas a partir de outros
+# diretórios de trabalho.
+
+project:
+  name: Mcapixaba_mitocurator
+  organism: "Melipona capixaba"
+  topology: circular          # circular, linear, unknown
+  genetic_code: 5            # 5=invertebrate mitochondrial; 2=vertebrate mitochondrial
+  rotate_to: COX1            # gene inicial definido pelo usuário
+
+input:
+  mitogenome: /full/path/to/candidate_mitogenome.gb
+  reference_gb: /full/path/to/reference_mitogenome.gb
+
+output:
+  outdir: /full/path/to/mitocurator_output
+
+reads:
+  hifi:
+  pacbio_clr:
+  ont:
+  illumina_r1:
+  illumina_r2:
+  illumina_se:
+
+threads:
+  total: 64
+  mitofinder: 32
+  blast: 48
+  minimap2: 48
+  samtools_view: 8
+  samtools_sort: 16
+  bcftools: 16
+  mafft: 8
+  report: 4
+
+tools:
+  minimap2: minimap2
+  samtools: samtools
+  bcftools: bcftools
+  blastn: blastn
+  tblastn: tblastn
+  blastp: blastp
+  mafft: mafft
+  seqkit: seqkit
+  arwen: arwen
+
+  mitofinder:
+    enabled: true
+
+    # Options:
+    #   python_interpreter
+    #   conda_env
+    #   wrapper
+    mode: python_interpreter
+
+    # Used only when mode: python_interpreter
+    # Example: /usr/bin/python2.7
+    python2: /usr/bin/python2.7
+    script: /full/path/to/MitoFinder/mitofinder
+
+    # Used only when mode: conda_env
+    conda_executable: /full/path/to/conda
+    conda_env: mitofinder_py2
+
+    # Used only when mode: wrapper
+    wrapper: /full/path/to/run_mitofinder.sh
+
+annotation:
+  run_mitofinder: true
+  run_arwen: true
+  run_mitfi: true
+  run_trnascan: false
+
+qc:
+  major_overlap_bp: 20
+  low_coverage_threshold: 5
+  flag_internal_stops: true
+  flag_truncated_genes: true
+
+report:
+  markdown: true
+  tsv: true
