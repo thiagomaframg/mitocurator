@@ -77,6 +77,14 @@ tools:
     # Used only when mode: wrapper
     wrapper: /full/path/to/run_mitofinder.sh
 
+    # Optional run label and extra args for MitoFinder invocation
+    prefix: sample_mt
+    extra_args: []
+
+    # If omitted, MitoCurator expects: <outdir>/03_mitofinder/mitofinder_annotated.gb
+    # Set this to the exact GenBank produced by your MitoFinder setup.
+    annotated_genbank: /full/path/to/mitofinder/output/annotated.gb
+
 annotation:
   run_mitofinder: true
   run_arwen: true

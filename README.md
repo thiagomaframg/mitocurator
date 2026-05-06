@@ -59,3 +59,14 @@ tools:
     python2: /usr/bin/python2.7
     script: /home/user/bin/MitoFinder/mitofinder
 ```
+
+## Fluxo para entrada FASTA
+
+Se `input.mitogenome` for FASTA (`.fa/.fasta/.fna`), o comando `run` executa:
+
+1. `check-tools`;
+2. anotação prévia com MitoFinder;
+3. rotação para o gene inicial;
+4. diagnóstico gene-a-gene.
+
+Para isso, configure `tools.mitofinder` no `config.yaml`, incluindo o caminho esperado para o GenBank anotado em `tools.mitofinder.annotated_genbank` quando necessário.

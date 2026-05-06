@@ -5,6 +5,8 @@ from .utils import load_config, ensure_dir, safe_get
 from .check_tools import check_tools
 from .gene_qc import diagnose
 from .rotate import rotate_to_gene
+from .io import infer_format
+from .mitofinder_runner import run_mitofinder_for_fasta
 
 def outdir_from_config(config: dict) -> Path:
     outdir = safe_get(config, ["output", "outdir"], None)
@@ -38,23 +40,31 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/3] Tool check: {tc}")
+    print(f"[1/4] Tool check: {tc}")
 
-    # Rotation is attempted only for GenBank input in v0.1
-    rotated_input = None
+    # FASTA-first flow: annotate with MitoFinder, then continue with rotate+diagnose.
+    current_input = config["input"]["mitogenome"]
+    fmt = infer_format(current_input)
+    if fmt == "fasta":
+        mf_dir = ensure_dir(root / "03_mitofinder")
+        annotated_gb = run_mitofinder_for_fasta(config, current_input, mf_dir)
+        config["input"]["mitogenome"] = str(annotated_gb)
+        print(f"[2/4] MitoFinder annotation: {annotated_gb}")
+    else:
+        print("[2/4] MitoFinder annotation: skipped (input already annotated GenBank)")
+
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[2/3] Rotation: {rotated_input}")
-        # Use rotated file for diagnosis
+        print(f"[3/4] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
     except Exception as e:
-        print(f"[2/3] Rotation skipped/failed: {e}")
-        print("      Proceeding with original input for diagnosis.")
+        print(f"[3/4] Rotation skipped/failed: {e}")
+        print("      Proceeding with current input for diagnosis.")
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[3/3] Diagnosis: {qc_dir}")
+    print(f"[4/4] Diagnosis: {qc_dir}")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
