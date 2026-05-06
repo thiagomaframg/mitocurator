@@ -17,21 +17,21 @@ project:
   organism: "Melipona capixaba"
   topology: circular          # circular, linear, unknown
   genetic_code: 5            # 5=invertebrate mitochondrial; 2=vertebrate mitochondrial
-  rotate_to: COX1            # gene inicial definido pelo usuário
+  rotate_to: ND6            # gene inicial definido pelo usuário
 
 input:
-  mitogenome: /full/path/to/candidate_mitogenome.gb
-  reference_gb: /full/path/to/reference_mitogenome.gb
+  mitogenome: /home/thiagomafra/projetos/mitocurator/final_mitogenome.fasta
+  reference_gb: /home/thiagomafra/projetos/mitocurator/Mscutellaris_mtDNA.gb
 
 output:
-  outdir: /full/path/to/mitocurator_output
+  outdir: /home/thiagomafra/projetos/mitocurator/teste1_output
 
 reads:
-  hifi:
+  hifi: /data/reads/asf/capixaba/pacbio/CP743-001P0001/cell/hifi_capixaba_trimmed.fastq.gz
   pacbio_clr:
   ont:
-  illumina_r1:
-  illumina_r2:
+  illumina_r1: /data/reads/asf/capixaba/illumina/pcr-free/capixaba_pcrfree_good_R1.fq 
+  illumina_r2: /data/reads/asf/capixaba/illumina/pcr-free/capixaba_pcrfree_good_R2.fq
   illumina_se:
 
 threads:
@@ -56,34 +56,31 @@ tools:
   seqkit: seqkit
   arwen: arwen
 
-  mitofinder:
-    enabled: true
+mitofinder:
+  enabled: true
 
-    # Options:
-    #   python_interpreter
-    #   conda_env
-    #   wrapper
-    mode: python_interpreter
+  # Options:
+  #   python_interpreter
+  #   conda_env
+  #   wrapper
+  mode: python_interpreter
 
-    # Used only when mode: python_interpreter
-    # Example: /usr/bin/python2.7
-    python2: /usr/bin/python2.7
-    script: /full/path/to/MitoFinder/mitofinder
+  # Used only when mode: python_interpreter
+  python2: /usr/bin/python2.7
+  script: /home/thiagomafra/bin/MitoFinder/mitofinder
 
-    # Used only when mode: conda_env
-    conda_executable: /full/path/to/conda
-    conda_env: mitofinder_py2
+  # MitoFinder annotation parameters
+  reference_gb: /home/thiagomafra/projetos/mitocurator/Mscutellaris_mtDNA.gb
+  organism_code: 5
+  threads: 8
+  memory_gb: 40
 
-    # Used only when mode: wrapper
-    wrapper: /full/path/to/run_mitofinder.sh
+  # Used only when mode: conda_env
+  conda_executable: /full/path/to/conda
+  conda_env: mitofinder_py2
 
-    # Optional run label and extra args for MitoFinder invocation
-    prefix: sample_mt
-    extra_args: []
-
-    # If omitted, MitoCurator expects: <outdir>/03_mitofinder/mitofinder_annotated.gb
-    # Set this to the exact GenBank produced by your MitoFinder setup.
-    annotated_genbank: /full/path/to/mitofinder/output/annotated.gb
+  # Used only when mode: wrapper
+  wrapper: /full/path/to/run_mitofinder.sh
 
 annotation:
   run_mitofinder: true
@@ -100,10 +97,3 @@ qc:
 report:
   markdown: true
   tsv: true
-
-refinement:
-  enabled: true
-  expected_gene_set: insect_mito
-  annotate_at_rich: true
-  at_rich_min_len: 500
-  at_rich_min_at: 75.0
