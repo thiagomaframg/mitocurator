@@ -39,3 +39,19 @@ def safe_get(d: Dict[str, Any], keys: List[str], default=None):
             return default
         cur = cur[k]
     return cur
+
+
+def get_genetic_code(config: Dict[str, Any], default: int = 5) -> int:
+    candidates = [
+        safe_get(config, ["project", "genetic_code"], None),
+        safe_get(config, ["genetic_code"], None),
+        safe_get(config, ["annotation", "genetic_code"], None),
+        safe_get(config, ["mitofinder", "organism_code"], None),
+    ]
+    for v in candidates:
+        if v is not None and str(v).strip() != "":
+            try:
+                return int(v)
+            except Exception:
+                continue
+    return int(default)
