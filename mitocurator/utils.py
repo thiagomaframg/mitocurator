@@ -14,15 +14,28 @@ def ensure_dir(path: str | Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-def run_cmd(cmd: List[str], log_file: Optional[Path] = None, check: bool = True) -> subprocess.CompletedProcess:
+def run_cmd(cmd, log_file=None, check=True, cwd=None):
+    import subprocess
+    from pathlib import Path
+
     if log_file:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write("COMMAND:\n" + " ".join(cmd) + "\n\n")
-            p = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)
+        log_file = Path(log_file)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(log_file, "w") as log:
+            p = subprocess.run(
+                cmd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=cwd,
+            )
     else:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        p = subprocess.run(cmd, cwd=cwd)
+
     if check and p.returncode != 0:
         raise RuntimeError(f"Command failed ({p.returncode}): {' '.join(cmd)}")
+
     return p
 
 def which_or_path(value: str | None) -> str | None:
