@@ -5,6 +5,7 @@ from .utils import load_config, ensure_dir, safe_get
 from .check_tools import check_tools
 from .gene_qc import diagnose
 from .rotate import rotate_to_gene
+from .refinement import refine_annotation
 
 def outdir_from_config(config: dict) -> Path:
     outdir = safe_get(config, ["output", "outdir"], None)
@@ -38,26 +39,49 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/3] Tool check: {tc}")
+    print(f"[1/5] Tool check: {tc}")
 
-    # Rotation is attempted only for GenBank input in v0.1
-    rotated_input = None
+    annotated_gb = config["input"]["mitogenome"]
+    print(f"[2/5] MitoFinder annotation: {annotated_gb}")
+
+    refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
+    refined_gb = annotated_gb
+    if refinement_enabled:
+        ref_dir = ensure_dir(root / "05_refinement")
+        refined_gb = refine_annotation(config, annotated_gb, ref_dir)
+        print(f"[3/5] Annotation refinement: {refined_gb}")
+    else:
+        print("[3/5] Annotation refinement: disabled")
+
     try:
         rot_dir = ensure_dir(root / "04_rotation")
+        config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[2/3] Rotation: {rotated_input}")
-        # Use rotated file for diagnosis
+        print(f"[4/5] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
     except Exception as e:
-        print(f"[2/3] Rotation skipped/failed: {e}")
-        print("      Proceeding with original input for diagnosis.")
+        print(f"[4/5] Rotation skipped/failed: {e}")
+        print("      Proceeding with current annotation for diagnosis.")
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[3/3] Diagnosis: {qc_dir}")
+    print(f"[5/5] Diagnosis: {qc_dir}")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
+    print(f"  {root / '05_refinement' / 'refined.gb'}")
+    print(f"  {root / '05_refinement' / 'expected_gene_set.tsv'}")
+    print(f"  {root / '05_refinement' / 'added_features.tsv'}")
+    print(f"  {root / '05_refinement' / 'missing_gene_candidates.tsv'}")
+    print(f"  {root / '05_refinement' / 'cds_refinement_candidates.tsv'}")
+    print(f"  {root / '05_refinement' / 'reference_similarity_candidates.tsv'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_reference_check.tsv'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_proteins.faa'}")
+    print(f"  {root / '05_refinement' / 'curation_recommendations.tsv'}")
+    print(f"  {root / '05_refinement' / 'curation_recommendations.md'}")
+    print(f"  {root / '05_refinement' / 'missing_gene_candidate_proteins.faa'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_reference_alignment.tsv'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_stop_context.tsv'}")
     print(f"  {qc_dir / 'gene_qc.tsv'}")
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
