@@ -585,7 +585,8 @@ def write_missing_gene_candidate_proteins(config, record, candidates_tsv, out_fa
             aa = str(Seq(nt3).translate(table=code, to_stop=False)).replace("*", "") if nt3 else ""
             header = f">{r['gene']}|{r['candidate_id']}|{int(r['start'])}..{int(r['end'])}|{r['strand']}|length_aa={len(aa)}|{r.get('decision_hint','.') }"
             lines.extend([header, aa])
-TEMP1
+
+    Path(out_faa).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 def write_problematic_cds_proteins(config, record, out_faa):
     code = get_genetic_code(config, default=5)
@@ -595,8 +596,8 @@ def write_problematic_cds_proteins(config, record, out_faa):
         strand = "+" if (feat.location.strand or 1) == 1 else "-"
         header = f">{gene}|{s}..{e}|{strand}|length_aa={len(aa)}|internal_stops={len(positions)}"
         lines.extend([header, aa])
-TEMP1
 
+    Path(out_faa).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _read_tsv_if_exists(path):
@@ -724,6 +725,38 @@ def refine_annotation(config, input_gb, outdir):
 
     generate_problematic_cds_stop_context(config, record, outdir / "problematic_cds_stop_context.tsv")
     generate_problematic_cds_reference_alignment(config, record, outdir / "problematic_cds_reference_alignment.tsv")
+
+    if bool(safe_get(config, ["refinement", "compare_candidates_to_reference"], False)):
+        generate_reference_similarity_candidates(
+            config,
+            record,
+            outdir / "missing_gene_candidates.tsv",
+            outdir / "reference_similarity_candidates.tsv",
+        )
+
+    if bool(safe_get(config, ["refinement", "compare_problematic_cds_to_reference"], False)):
+        generate_problematic_cds_reference_check(
+            config,
+            record,
+            outdir / "problematic_cds_reference_check.tsv",
+        )
+
+
+    if bool(safe_get(config, ["refinement", "compare_candidates_to_reference"], False)):
+        generate_reference_similarity_candidates(
+            config,
+            record,
+            outdir / "missing_gene_candidates.tsv",
+            outdir / "reference_similarity_candidates.tsv",
+        )
+
+    if bool(safe_get(config, ["refinement", "compare_problematic_cds_to_reference"], False)):
+        generate_problematic_cds_reference_check(
+            config,
+            record,
+            outdir / "problematic_cds_reference_check.tsv",
+        )
+
     write_missing_gene_candidate_proteins(config, record, outdir / "missing_gene_candidates.tsv", outdir / "missing_gene_candidate_proteins.faa")
     write_problematic_cds_proteins(config, record, outdir / "problematic_cds_proteins.faa")
     generate_curation_recommendations(config, outdir)

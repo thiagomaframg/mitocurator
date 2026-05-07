@@ -4,9 +4,18 @@ from pathlib import Path
 import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
-import pysam
-
 from .utils import ensure_dir, safe_get, run_cmd
+
+
+def _load_pysam():
+    try:
+        import pysam
+        return pysam
+    except ImportError as exc:
+        raise RuntimeError(
+            "The read_support step requires the Python package 'pysam'. "
+            "Install it with: mamba install -c bioconda -c conda-forge pysam"
+        ) from exc
 from .io import read_record
 from .utils import get_genetic_code
 
@@ -35,6 +44,7 @@ def _aa_for_codon(codon: str, code: int):
 
 
 def run_read_support(config: dict, refined_gb: Path, refinement_dir: Path, outdir: Path):
+    pysam = _load_pysam()
     outdir = ensure_dir(outdir)
     stop_tsv = refinement_dir / "problematic_cds_stop_context.tsv"
     support_tsv = outdir / "problematic_stop_read_support.tsv"
