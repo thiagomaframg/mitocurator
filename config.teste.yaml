@@ -115,3 +115,10 @@ refinement:
   find_cds_refinement_candidates: true
   orf_min_nt: 150
   cds_refinement_window: 300
+
+  compare_candidates_to_reference: true
+  compare_problematic_cds_to_reference: true
+  reference_similarity_min_identity: 25.0
+
+reference:
+  genbank: /home/thiagomafra/projetos/mitocurator/Mscutellaris_mtDNA.gb

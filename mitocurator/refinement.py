@@ -507,6 +507,24 @@ def refine_annotation(config, input_gb, outdir):
 
     find_cds_refinement_candidates(config, record, outdir / "problematic_features.tsv", outdir / "cds_refinement_candidates.tsv") if bool(safe_get(config, ["refinement", "find_cds_refinement_candidates"], True)) else pd.DataFrame(columns=["gene", "old_start", "old_end", "old_strand", "old_length_nt", "old_internal_stop_count", "candidate_start", "candidate_end", "candidate_strand", "candidate_length_nt", "candidate_length_aa", "candidate_frame", "candidate_internal_stop_count", "candidate_terminal_stop", "delta_start", "delta_end", "decision_hint", "comment"]).to_csv(outdir / "cds_refinement_candidates.tsv", sep="\t", index=False)
 
+    ref_similarity_tsv = outdir / "reference_similarity_candidates.tsv"
+    problematic_ref_tsv = outdir / "problematic_cds_reference_check.tsv"
+
+    if bool(safe_get(config, ["refinement", "compare_candidates_to_reference"], False)):
+        generate_reference_similarity_candidates(
+            config,
+            record,
+            outdir / "missing_gene_candidates.tsv",
+            ref_similarity_tsv,
+        )
+
+    if bool(safe_get(config, ["refinement", "compare_problematic_cds_to_reference"], False)):
+        generate_problematic_cds_reference_check(
+            config,
+            record,
+            problematic_ref_tsv,
+        )
+
     out_gb = outdir / "refined.gb"
     write_record(record, out_gb, "genbank")
     return out_gb
