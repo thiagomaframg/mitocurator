@@ -92,3 +92,88 @@ qc:
 report:
   markdown: true
   tsv: true
+
+refinement:
+  # Genetic code is resolved from: project.genetic_code -> genetic_code ->
+  # annotation.genetic_code -> mitofinder.organism_code -> default(5).
+  enabled: true
+
+  # Backward-compatible old format still accepted:
+  # expected_gene_set: insect_mito
+
+  # New format:
+  expected_gene_set:
+    profile: metazoa_mito      # metazoa_mito | insect_mito | vertebrate_mito | minimal_mito | custom
+    custom_file: null          # required only when profile: custom
+
+  # Optional alias-normalization profile (kept for compatibility/evolution)
+  gene_name_profile: insect_mito
+
+  annotate_at_rich: true
+  at_rich_min_len: 500
+  at_rich_min_at: 75.0
+
+  find_missing_cds_candidates: true
+  find_cds_refinement_candidates: true
+  orf_min_nt: 150
+  cds_refinement_window: 300
+  compare_candidates_to_reference: true
+  compare_problematic_cds_to_reference: true
+  reference_similarity_min_identity: 25.0
+
+# Example presets:
+# 1) Insect/bee: project.genetic_code: 5 + expected_gene_set.profile: insect_mito or metazoa_mito
+# 2) Vertebrate/fish/amphibian: project.genetic_code: 2 + expected_gene_set.profile: vertebrate_mito
+# 3) Custom: expected_gene_set.profile: custom + expected_gene_set.custom_file: /path/expected_genes.tsv
+
+reference:
+  genbank: /path/to/reference.gb
+
+read_support:
+  enabled: true
+  threads: 8
+  mapper: minimap2
+  use_hifi: true
+  use_illumina: false
+  hifi_reads: []
+  illumina_reads:
+    r1:
+    r2:
+  min_base_quality: 20
+  min_mapping_quality: 20
+  flank_bp: 20
+
+# read_support legacy format (kept for compatibility):
+# read_support:
+#   use_hifi: true
+#   hifi_reads: [/path/hifi.fastq.gz]
+#   use_illumina: true
+#   illumina_reads:
+#     r1: /path/R1.fq.gz
+#     r2: /path/R2.fq.gz
+
+# read_support new multi-set format:
+# read_support:
+#   read_sets:
+#     - name: hifi
+#       type: pacbio_hifi
+#       mapper: minimap2
+#       preset: map-hifi
+#       reads: [/path/hifi.fastq.gz]
+#     - name: ont
+#       type: ont
+#       mapper: minimap2
+#       preset: map-ont
+#       reads: [/path/ont.fastq.gz]
+#     - name: pacbio_clr
+#       type: pacbio_clr
+#       mapper: minimap2
+#       preset: map-pb
+#       reads: [/path/clr.fastq.gz]
+#     - name: illumina
+#       type: illumina_pe
+#       mapper: minimap2
+#       preset: sr
+#       reads:
+#         r1: /path/R1.fq.gz
+#         r2: /path/R2.fq.gz
