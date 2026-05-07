@@ -6,7 +6,10 @@ from .check_tools import check_tools
 from .gene_qc import diagnose
 from .rotate import rotate_to_gene
 from .refinement import refine_annotation
+from .io import infer_format
+from .mitofinder_runner import run_mitofinder_for_fasta
 from .read_support import run_read_support
+
 
 def outdir_from_config(config: dict) -> Path:
     outdir = safe_get(config, ["output", "outdir"], None)
@@ -15,11 +18,13 @@ def outdir_from_config(config: dict) -> Path:
         outdir = str(Path.cwd() / project)
     return ensure_dir(outdir)
 
+
 def cmd_check_tools(args):
     config = load_config(args.config)
     outdir = ensure_dir(outdir_from_config(config) / "00_logs")
     outfile = check_tools(config, outdir)
     print(f"Tool check written to: {outfile}")
+
 
 def cmd_diagnose(args):
     config = load_config(args.config)
@@ -27,11 +32,13 @@ def cmd_diagnose(args):
     diagnose(config, outdir)
     print(f"Diagnostic files written to: {outdir}")
 
+
 def cmd_rotate(args):
     config = load_config(args.config)
     outdir = ensure_dir(outdir_from_config(config) / "04_rotation")
     out = rotate_to_gene(config, outdir)
     print(f"Rotated GenBank written to: {out}")
+
 
 def cmd_run(args):
     config = load_config(args.config)
@@ -42,14 +49,26 @@ def cmd_run(args):
     tc = check_tools(config, logs)
     print(f"[1/6] Tool check: {tc}")
 
-    annotated_gb = config["input"]["mitogenome"]
-    print(f"[2/6] MitoFinder annotation: {annotated_gb}")
+    current_input = config["input"]["mitogenome"]
+    fmt = infer_format(current_input)
+
+    if fmt == "fasta":
+        mf_dir = ensure_dir(root / "03_mitofinder")
+        annotated_gb = run_mitofinder_for_fasta(config, current_input, mf_dir)
+        config["input"]["mitogenome"] = str(annotated_gb)
+        print(f"[2/6] MitoFinder annotation: {annotated_gb}")
+    else:
+        annotated_gb = current_input
+        config["input"]["mitogenome"] = str(annotated_gb)
+        print("[2/6] MitoFinder annotation: skipped (input already annotated GenBank)")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
+
     if refinement_enabled:
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
+        config["input"]["mitogenome"] = str(refined_gb)
         print(f"[3/6] Annotation refinement: {refined_gb}")
     else:
         print("[3/6] Annotation refinement: disabled")
@@ -58,13 +77,15 @@ def cmd_run(args):
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[4/6] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
+        print(f"[4/6] Rotation: {rotated_input}")
     except Exception as e:
         print(f"[4/6] Rotation skipped/failed: {e}")
-        print("      Proceeding with current annotation for diagnosis.")
+        print("      Proceeding with current annotation for downstream steps.")
+        config["input"]["mitogenome"] = str(refined_gb)
 
-    if bool(safe_get(config, ["read_support", "enabled"], True)):
+    read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
+    if read_support_enabled:
         rs_dir = ensure_dir(root / "06_read_support")
         run_read_support(config, Path(refined_gb), root / "05_refinement", rs_dir)
         print(f"[5/6] Read support: {rs_dir}")
@@ -84,16 +105,21 @@ def cmd_run(args):
     print(f"  {root / '05_refinement' / 'cds_refinement_candidates.tsv'}")
     print(f"  {root / '05_refinement' / 'reference_similarity_candidates.tsv'}")
     print(f"  {root / '05_refinement' / 'problematic_cds_reference_check.tsv'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_stop_context.tsv'}")
+    print(f"  {root / '05_refinement' / 'problematic_cds_reference_alignment.tsv'}")
+    print(f"  {root / '05_refinement' / 'missing_gene_candidate_proteins.faa'}")
     print(f"  {root / '05_refinement' / 'problematic_cds_proteins.faa'}")
     print(f"  {root / '05_refinement' / 'curation_recommendations.tsv'}")
     print(f"  {root / '05_refinement' / 'curation_recommendations.md'}")
-    print(f"  {root / '05_refinement' / 'missing_gene_candidate_proteins.faa'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_reference_alignment.tsv'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_stop_context.tsv'}")
+    if read_support_enabled:
+        print(f"  {root / '06_read_support' / 'problematic_stop_read_support.tsv'}")
+        print(f"  {root / '06_read_support' / 'problematic_stop_variants.tsv'}")
+        print(f"  {root / '06_read_support' / 'read_support_summary.md'}")
     print(f"  {qc_dir / 'gene_qc.tsv'}")
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
+
 
 def build_parser():
     p = argparse.ArgumentParser(prog="mitocurator", description="MitoCurator v0.1-dev")
@@ -117,10 +143,12 @@ def build_parser():
 
     return p
 
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
     args.func(args)
+
 
 if __name__ == "__main__":
     main()
