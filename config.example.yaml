@@ -92,3 +92,15 @@ qc:
 report:
   markdown: true
   tsv: true
+
+refinement:
+  enabled: true
+  expected_gene_set: insect_mito
+  annotate_at_rich: true
+  at_rich_min_len: 500
+  at_rich_min_at: 75.0
+
+  find_missing_cds_candidates: true
+  find_cds_refinement_candidates: true
+  orf_min_nt: 150
+  cds_refinement_window: 300
