@@ -1,0 +1,110 @@
+# MitoCurator configuration file
+#
+# IMPORTANT:
+# Always use absolute/full paths for input files, references, reads,
+# external tools and output directories.
+#
+# IMPORTANTE:
+# Use sempre caminhos completos/absolutos para arquivos de entrada,
+# referências, reads, ferramentas externas e diretórios de saída.
+#
+# Evite caminhos relativos, pois o pipeline cria subdiretórios internos
+# e algumas ferramentas externas podem ser chamadas a partir de outros
+# diretórios de trabalho.
+
+project:
+  name: Mcapixaba_mitocurator
+  organism: "Melipona capixaba"
+  topology: circular          # circular, linear, unknown
+  genetic_code: 5            # 5=invertebrate mitochondrial; 2=vertebrate mitochondrial
+  rotate_to: ND6            # gene inicial definido pelo usuário
+
+input:
+  mitogenome: /home/thiagomafra/projetos/mitocurator/final_mitogenome.fasta
+  reference_gb: /home/thiagomafra/projetos/mitocurator/Mscutellaris_mtDNA.gb
+
+output:
+  outdir: /home/thiagomafra/projetos/mitocurator/teste1_output
+
+reads:
+  hifi: /data/reads/asf/capixaba/pacbio/CP743-001P0001/cell/hifi_capixaba_trimmed.fastq.gz
+  pacbio_clr:
+  ont:
+  illumina_r1: /data/reads/asf/capixaba/illumina/pcr-free/capixaba_pcrfree_good_R1.fq 
+  illumina_r2: /data/reads/asf/capixaba/illumina/pcr-free/capixaba_pcrfree_good_R2.fq
+  illumina_se:
+
+threads:
+  total: 64
+  mitofinder: 32
+  blast: 48
+  minimap2: 48
+  samtools_view: 8
+  samtools_sort: 16
+  bcftools: 16
+  mafft: 8
+  report: 4
+
+tools:
+  minimap2: minimap2
+  samtools: samtools
+  bcftools: bcftools
+  blastn: blastn
+  tblastn: tblastn
+  blastp: blastp
+  mafft: mafft
+  seqkit: seqkit
+  arwen: arwen
+
+mitofinder:
+  enabled: true
+
+  # Options:
+  #   python_interpreter
+  #   conda_env
+  #   wrapper
+  mode: python_interpreter
+
+  # Used only when mode: python_interpreter
+  python2: /usr/bin/python2.7
+  script: /home/thiagomafra/bin/MitoFinder/mitofinder
+
+  # MitoFinder annotation parameters
+  reference_gb: /home/thiagomafra/projetos/mitocurator/Mscutellaris_mtDNA.gb
+  organism_code: 5
+  threads: 8
+  memory_gb: 40
+
+  # Used only when mode: conda_env
+  conda_executable: /full/path/to/conda
+  conda_env: mitofinder_py2
+
+  # Used only when mode: wrapper
+  wrapper: /full/path/to/run_mitofinder.sh
+
+annotation:
+  run_mitofinder: true
+  run_arwen: true
+  run_mitfi: true
+  run_trnascan: false
+
+qc:
+  major_overlap_bp: 20
+  low_coverage_threshold: 5
+  flag_internal_stops: true
+  flag_truncated_genes: true
+
+report:
+  markdown: true
+  tsv: true
+
+refinement:
+  enabled: true
+  expected_gene_set: insect_mito
+  annotate_at_rich: true
+  at_rich_min_len: 500
+  at_rich_min_at: 75.0
+  find_missing_cds_candidates: true
+  find_cds_refinement_candidates: true
+  orf_min_nt: 150
+  cds_refinement_window: 300
