@@ -156,7 +156,7 @@ targeted_consensus:
   minimap2_threads: 8
   samtools_threads: 8
   target_filter: ND2
-  read_set_filter: hifi
+  read_set_filter: null
   max_targets: null
   min_base_quality: 20
   min_mapping_quality: 20

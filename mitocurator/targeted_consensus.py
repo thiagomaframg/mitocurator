@@ -473,11 +473,10 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
         md.write("# Targeted consensus\n\n")
         md.write(f"- total consensos: {len(out_df)}\n\n")
         sections = [
-            ("GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Candidatos de genes ausentes suportados"),
+            ("GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Missing-gene candidates supported by consensus"),
             ("PARTIAL_GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Partial gene candidates supported by consensus"),
-            ("PARTIAL_GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Candidatos parciais suportados"),
-            ("CONSENSUS_HAS_ORF_WITH_STOPS", "Consensos com ORF semelhante e stops"),
-            ("MANUAL_REVIEW", "Casos para revisão manual"),
+            ("CONSENSUS_HAS_ORF_WITH_STOPS", "Consensus with ORF similar to reference but with stops"),
+            ("MANUAL_REVIEW", "Manual review cases"),
         ]
         for key, title in sections:
             md.write(f"## {title}\n\n")
@@ -489,6 +488,88 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
                     md.write(f"- {rr.target_id} [{rr.read_set}] pid={rr.percent_identity} cov_ref={rr.aligned_coverage_reference}\n")
                 md.write("\n")
         md.write("## Best missing-gene candidates\n\n")
-        md.write(f"- TSV: {rank_tsv}\n\n")
+        md.write(f"- TSV: {rank_tsv}\n")
+        md.write(f"- Markdown: {rank_md}\n\n")
+        cross_tsv, cross_md = write_cross_readset_missing_gene_candidates(out_df, outdir, rank_tsv)
+        md.write("## Cross-readset missing-gene ranking\n\n")
+        md.write(f"- TSV: {cross_tsv}\n")
+        md.write(f"- Markdown: {cross_md}\n\n")
         md.write("> Nenhum GenBank foi alterado.\n")
     return outdir
+
+
+def write_cross_readset_missing_gene_candidates(targeted_df: pd.DataFrame, outdir: Path, best_rank_tsv: Path):
+    cross_tsv = outdir / "cross_readset_missing_gene_candidates.tsv"
+    cross_md = outdir / "cross_readset_missing_gene_candidates.md"
+    cols = ["gene","target_id","combined_rank","combined_recommendation","read_sets_supporting","n_read_sets","best_rank","mean_rank","mean_rank_score","mean_percent_identity","mean_aligned_coverage_reference","mean_aligned_coverage_consensus","mean_orf_length_aa","reference_aa_length","orf_length_aa_range","total_internal_stop_count","max_internal_stop_count","mean_ambiguous_fraction","mean_covered_fraction","mean_depth","selection_reason","consensus_fastas"]
+    if best_rank_tsv.exists():
+        src = pd.read_csv(best_rank_tsv, sep="\t")
+    else:
+        src = targeted_df[targeted_df["target_type"] == "missing_gene_candidate"].copy()
+        if src.empty:
+            pd.DataFrame(columns=cols).to_csv(cross_tsv, sep="\t", index=False)
+            cross_md.write_text("# Cross-readset missing-gene candidates\n\nNo missing-gene candidates.\n", encoding="utf-8")
+            return cross_tsv, cross_md
+        src["rank"] = 1
+        src["rank_score"] = 0
+    for c in ["rank","rank_score","percent_identity","aligned_coverage_reference","aligned_coverage_consensus","orf_length_aa","reference_aa_length","internal_stop_count","ambiguous_fraction","covered_fraction","mean_depth"]:
+        if c in src.columns:
+            src[c] = pd.to_numeric(src[c], errors="coerce")
+    rows = []
+    grp = src.groupby(["gene","target_id"], dropna=False)
+    for (g, tid), d in grp:
+        rs = sorted(set(d["read_set"].astype(str)))
+        nrs = len(rs)
+        best_rank = d["rank"].min() if "rank" in d.columns else 1
+        mean_rank = d["rank"].mean() if "rank" in d.columns else 1
+        mean_score = d["rank_score"].mean() if "rank_score" in d.columns else 0
+        mean_pid = d["percent_identity"].mean()
+        mean_covr = d["aligned_coverage_reference"].mean()
+        mean_covc = d["aligned_coverage_consensus"].mean()
+        mean_orf = d["orf_length_aa"].mean()
+        ref_aa = d["reference_aa_length"].dropna().iloc[0] if d["reference_aa_length"].notna().any() else None
+        min_orf = d["orf_length_aa"].min(); max_orf = d["orf_length_aa"].max()
+        tot_stops = d["internal_stop_count"].fillna(0).sum()
+        max_stops = d["internal_stop_count"].fillna(0).max()
+        mean_amb = d["ambiguous_fraction"].mean()
+        mean_covf = d["covered_fraction"].mean()
+        mean_depth = d["mean_depth"].mean()
+        if nrs >= 2 and tot_stops == 0 and mean_covr >= 50 and mean_pid >= 30:
+            rec = "CROSS_READSET_GENE_CANDIDATE_SUPPORTED"
+        elif nrs >= 2 and tot_stops == 0 and mean_covr >= 25 and mean_pid >= 25:
+            rec = "CROSS_READSET_PARTIAL_GENE_CANDIDATE_SUPPORTED"
+        elif nrs == 1 and max_stops == 0 and mean_covr >= 50 and mean_pid >= 30:
+            rec = "SINGLE_READSET_GENE_CANDIDATE_SUPPORTED"
+        else:
+            rec = "MANUAL_REVIEW"
+        consensus_fastas = ";".join(sorted(set(d.get("consensus_fasta", []).astype(str))))
+        rows.append({"gene": g, "target_id": tid, "combined_recommendation": rec, "read_sets_supporting": ",".join(rs), "n_read_sets": nrs, "best_rank": best_rank, "mean_rank": round(mean_rank,3), "mean_rank_score": round(mean_score,3), "mean_percent_identity": round(mean_pid,3), "mean_aligned_coverage_reference": round(mean_covr,3), "mean_aligned_coverage_consensus": round(mean_covc,3), "mean_orf_length_aa": round(mean_orf,3), "reference_aa_length": ref_aa if ref_aa is not None else ".", "orf_length_aa_range": f"{min_orf}-{max_orf}", "total_internal_stop_count": int(tot_stops), "max_internal_stop_count": int(max_stops), "mean_ambiguous_fraction": round(mean_amb,4), "mean_covered_fraction": round(mean_covf,4), "mean_depth": round(mean_depth,3), "selection_reason": "n_read_sets+rank+coverage+identity+length+ambiguity+depth", "consensus_fastas": consensus_fastas})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        out = pd.DataFrame(columns=cols)
+    else:
+        out = out.sort_values(["n_read_sets","best_rank","mean_rank","mean_aligned_coverage_reference","mean_percent_identity","mean_ambiguous_fraction","mean_covered_fraction","mean_depth"], ascending=[False,True,True,False,False,True,False,False]).reset_index(drop=True)
+        out["combined_rank"] = range(1, len(out) + 1)
+        out = out[cols]
+    out.to_csv(cross_tsv, sep="\t", index=False)
+    with open(cross_md, "w", encoding="utf-8") as md:
+        md.write("# Cross-readset missing-gene candidates\n\n")
+        if out.empty:
+            md.write("No missing-gene candidates.\n")
+        else:
+            for gene, gdf in out.groupby("gene"):
+                md.write(f"## {gene}\n\n")
+                best = gdf.iloc[0]
+                md.write("Best candidate:\n")
+                md.write(f"- target_id: {best['target_id']}\n")
+                md.write(f"- combined_recommendation: {best['combined_recommendation']}\n")
+                md.write(f"- read_sets_supporting: {best['read_sets_supporting']}\n")
+                md.write(f"- mean identity: {best['mean_percent_identity']}\n")
+                md.write(f"- mean reference coverage: {best['mean_aligned_coverage_reference']}\n")
+                md.write(f"- ORF length range: {best['orf_length_aa_range']}\n\n")
+                md.write("Ranked candidates:\n")
+                for rr in gdf.itertuples():
+                    md.write(f"- rank {rr.combined_rank}: {rr.target_id} ({rr.combined_recommendation}) [{rr.read_sets_supporting}]\n")
+                md.write("\n")
+        md.write("> Nenhum GenBank foi alterado.\n")
+    return cross_tsv, cross_md

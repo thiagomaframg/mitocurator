@@ -238,6 +238,8 @@ def cmd_run(args):
         print(f"  {root / '10_targeted_consensus' / 'targeted_consensus.md'}")
         print(f"  {root / '10_targeted_consensus' / 'best_missing_gene_candidates.tsv'}")
         print(f"  {root / '10_targeted_consensus' / 'best_missing_gene_candidates.md'}")
+        print(f"  {root / '10_targeted_consensus' / 'cross_readset_missing_gene_candidates.tsv'}")
+        print(f"  {root / '10_targeted_consensus' / 'cross_readset_missing_gene_candidates.md'}")
 
     print(f"  {qc_dir / 'gene_qc.tsv'}")
     print(f"  {qc_dir / 'problematic_features.tsv'}")
