@@ -239,6 +239,7 @@ Saídas:
 - `10_targeted_consensus/consensus_fasta/*.consensus.fasta`
 
 Implementação atual (método `pileup`) usa maioria por posição com filtros de qualidade/profundidade e gera recomendações diagnósticas, sem alterar o GenBank.
+Também gera ranking em `10_targeted_consensus/best_missing_gene_candidates.tsv` e `.md` para priorizar candidatos de genes ausentes por gene/read_set.
 
 ### Rodando apenas targeted_consensus
 ```bash

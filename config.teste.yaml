@@ -157,12 +157,12 @@ targeted_consensus:
   samtools_threads: 8
   target_filter: ND2
   read_set_filter: hifi
-  max_targets: 1
+  max_targets: null
   min_base_quality: 20
   min_mapping_quality: 20
   min_depth: 5
   majority_threshold: 0.7
-  max_reads: 1000
+  max_reads: 3000
   max_depth_per_position: 500
   orf_scan_mode: best_orf
   scan_six_frames: true
@@ -171,4 +171,4 @@ targeted_consensus:
   random_seed: 42
   compare_to_reference: true
   translate_consensus: true
-  reuse_existing_outputs: false
+  reuse_existing_outputs: true

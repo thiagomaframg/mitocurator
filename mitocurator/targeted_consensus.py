@@ -174,7 +174,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
     tsv_in = reconstruction_pools_dir / "reconstruction_pools.tsv"
     tsv_out = outdir / "targeted_consensus.tsv"
     md_out = outdir / "targeted_consensus.md"
-    cols = ["target_id","target_type","gene","read_set","pool_type","consensus_backend","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_filter_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
+    cols = ["target_id","target_type","gene","read_set","pool_type","consensus_backend","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","covered_bases","covered_fraction","low_depth_bases","low_depth_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_filter_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
     if not tsv_in.exists():
         pd.DataFrame(columns=cols).to_csv(tsv_out, sep="\t", index=False)
         md_out.write_text("# Targeted consensus\n\nNo reconstruction pools TSV found.\n", encoding="utf-8")
@@ -390,9 +390,14 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
         min_depth_obs = min(depths) if depths else 0
         n_bases = len(cseq) - cseq.count("N")
         amb_frac = (cseq.count("N")/len(cseq)) if cseq else 1
+        covered_bases = sum(1 for d in depths if d >= 1)
+        covered_fraction = (covered_bases / len(cseq)) if cseq else 0
+        low_depth_bases = sum(1 for d in depths if d < min_depth)
+        low_depth_fraction = (low_depth_bases / len(cseq)) if cseq else 1
+
         if not best:
             recm = "NO_RELIABLE_CONSENSUS"
-        elif (mean_depth_obs < min_depth) or (min_depth_obs < 1) or (n_bases == 0):
+        elif (mean_depth_obs < min_depth) or (n_bases == 0) or (covered_fraction < 0.80):
             recm = "LOW_DEPTH_CONSENSUS"
         elif amb_frac > 0.20:
             recm = "CONSENSUS_AMBIGUOUS"
@@ -414,10 +419,11 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
 
         b = best or {"best_orf_id": ".", "orf_start": ".", "orf_end": ".", "orf_strand": ".", "orf_frame": ".", "orf_length_nt": 0, "orf_length_aa": 0, "internal_stop_count": ".", "terminal_stop": "."}
         comment_extra = "max_depth_per_position not applied by count_coverage backend" if consensus_backend == "count_coverage" else ""
+        note_zero = "; some positions have zero coverage" if (min_depth_obs == 0 and covered_fraction >= 0.80 and amb_frac <= 0.20) else ""
         rows.append({"target_id": tid, "target_type": r.target_type, "gene": r.gene, "read_set": rs, "pool_type": pool_type, "consensus_backend": consensus_backend,
                      "reference_used": str(local_ref), "consensus_fasta": str(cfa / f"{tid}.{rs}.{pool_type}.consensus.fasta"),
                      "consensus_length": len(cseq), "n_bases": n_bases, "ambiguous_bases": cseq.count("N"),
-                     "ambiguous_fraction": round(amb_frac,4), "mean_depth": round(mean_depth_obs,2) if depths else 0,
+                     "ambiguous_fraction": round(amb_frac,4), "covered_bases": covered_bases, "covered_fraction": round(covered_fraction,4), "low_depth_bases": low_depth_bases, "low_depth_fraction": round(low_depth_fraction,4), "mean_depth": round(mean_depth_obs,2) if depths else 0,
                      "min_depth": min_depth_obs, "max_depth": max(depths) if depths else 0,
                      "best_orf_id": b["best_orf_id"], "num_orfs_found": len(orfs), "best_orf_selection_reason": reason,
                      "orf_start": b["orf_start"], "orf_end": b["orf_end"], "orf_strand": b["orf_strand"], "orf_frame": b["orf_frame"],
@@ -429,16 +435,46 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
                      "elapsed_prepare_s": round(el_prep,3), "elapsed_map_s": round(el_map,3), "elapsed_sort_s": round(el_sort,3), "elapsed_index_s": round(el_index,3), "elapsed_filter_s": round(el_filter,3),
                      "elapsed_pileup_s": round(el_pile,3), "elapsed_orf_s": round(el_orf,3), "elapsed_reference_compare_s": round(el_ref,3),
                      "elapsed_write_s": round(el_write,3), "elapsed_total_s": round(perf_counter()-t_total,3),
-                     "comment": f"preset={preset}; type={rt}" + (f"; {comment_extra}" if comment_extra else "")})
+                     "comment": f"preset={preset}; type={rt}" + (f"; {comment_extra}" if comment_extra else "") + note_zero})
         print(f"[targeted_consensus] target={tid} read_set={rs} step=done elapsed_s={round(perf_counter()-t_total,2)}")
 
     out_df = pd.DataFrame(rows, columns=cols)
     out_df.to_csv(tsv_out, sep="\t", index=False)
+    # ranking for missing gene candidates
+    rank_tsv = outdir / "best_missing_gene_candidates.tsv"
+    rank_md = outdir / "best_missing_gene_candidates.md"
+    sub = out_df[out_df["target_type"] == "missing_gene_candidate"].copy() if not out_df.empty else pd.DataFrame()
+    if sub.empty:
+        pd.DataFrame(columns=["gene","read_set","rank","target_id","recommendation","rank_score","selection_reason","orf_length_aa","reference_aa_length","internal_stop_count","percent_identity","aligned_coverage_reference","aligned_coverage_consensus","ambiguous_fraction","covered_fraction","mean_depth","consensus_fasta"]).to_csv(rank_tsv, sep="\t", index=False)
+        rank_md.write_text("# Best missing-gene candidates\n\nNo missing-gene candidates.\n", encoding="utf-8")
+    else:
+        pri = {"GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS":7,"PARTIAL_GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS":6,"CONSENSUS_HAS_ORF_WITH_STOPS":5,"MANUAL_REVIEW":4,"CONSENSUS_AMBIGUOUS":3,"LOW_DEPTH_CONSENSUS":2,"NO_RELIABLE_CONSENSUS":1}
+        for c in ["internal_stop_count","aligned_coverage_reference","percent_identity","ambiguous_fraction","covered_fraction","mean_depth","orf_length_aa","reference_aa_length"]:
+            sub[c] = pd.to_numeric(sub[c], errors="coerce")
+        sub["recommendation_priority"] = sub["recommendation"].map(pri).fillna(0)
+        sub["len_delta"] = (sub["orf_length_aa"] - sub["reference_aa_length"]).abs()
+        sub["rank_score"] = sub["recommendation_priority"]*10000 - sub["internal_stop_count"].fillna(999)*200 + sub["aligned_coverage_reference"].fillna(0)*10 + sub["percent_identity"].fillna(0)*5 - sub["len_delta"].fillna(999) - sub["ambiguous_fraction"].fillna(1)*100 + sub["covered_fraction"].fillna(0)*50 + sub["mean_depth"].fillna(0)*0.01
+        out_rows = []
+        for (g, rs), grp in sub.groupby(["gene","read_set"]):
+            grp = grp.sort_values(["rank_score"], ascending=False).reset_index(drop=True)
+            for i, rr in grp.iterrows():
+                out_rows.append({"gene": g, "read_set": rs, "rank": i+1, "target_id": rr["target_id"], "recommendation": rr["recommendation"], "rank_score": round(rr["rank_score"],3), "selection_reason": "priority+stops+identity+coverage+length+ambiguity", "orf_length_aa": rr["orf_length_aa"], "reference_aa_length": rr["reference_aa_length"], "internal_stop_count": rr["internal_stop_count"], "percent_identity": rr["percent_identity"], "aligned_coverage_reference": rr["aligned_coverage_reference"], "aligned_coverage_consensus": rr["aligned_coverage_consensus"], "ambiguous_fraction": rr["ambiguous_fraction"], "covered_fraction": rr["covered_fraction"], "mean_depth": rr["mean_depth"], "consensus_fasta": rr["consensus_fasta"]})
+        rank_df = pd.DataFrame(out_rows)
+        rank_df.to_csv(rank_tsv, sep="\t", index=False)
+        with open(rank_md, "w", encoding="utf-8") as md:
+            md.write("# Best missing-gene candidates\n\n")
+            for (g, rs), grp in rank_df.groupby(["gene","read_set"]):
+                md.write(f"## {g} / {rs}\n\n")
+                for rr in grp.itertuples():
+                    md.write(f"- rank {rr.rank}: {rr.target_id} | {rr.recommendation} | pid={rr.percent_identity} cov_ref={rr.aligned_coverage_reference}\n")
+                md.write("\n")
+            md.write("> Nenhum GenBank foi alterado.\n")
     with open(md_out, "w", encoding="utf-8") as md:
         md.write("# Targeted consensus\n\n")
         md.write(f"- total consensos: {len(out_df)}\n\n")
         sections = [
             ("GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Candidatos de genes ausentes suportados"),
+            ("PARTIAL_GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Partial gene candidates supported by consensus"),
             ("PARTIAL_GENE_CANDIDATE_SUPPORTED_BY_CONSENSUS", "Candidatos parciais suportados"),
             ("CONSENSUS_HAS_ORF_WITH_STOPS", "Consensos com ORF semelhante e stops"),
             ("MANUAL_REVIEW", "Casos para revisão manual"),
@@ -452,5 +488,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
                 for rr in sub.itertuples():
                     md.write(f"- {rr.target_id} [{rr.read_set}] pid={rr.percent_identity} cov_ref={rr.aligned_coverage_reference}\n")
                 md.write("\n")
+        md.write("## Best missing-gene candidates\n\n")
+        md.write(f"- TSV: {rank_tsv}\n\n")
         md.write("> Nenhum GenBank foi alterado.\n")
     return outdir
