@@ -174,7 +174,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
     tsv_in = reconstruction_pools_dir / "reconstruction_pools.tsv"
     tsv_out = outdir / "targeted_consensus.tsv"
     md_out = outdir / "targeted_consensus.md"
-    cols = ["target_id","target_type","gene","read_set","pool_type","consensus_backend","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
+    cols = ["target_id","target_type","gene","read_set","pool_type","consensus_backend","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_filter_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
     if not tsv_in.exists():
         pd.DataFrame(columns=cols).to_csv(tsv_out, sep="\t", index=False)
         md_out.write_text("# Targeted consensus\n\nNo reconstruction pools TSV found.\n", encoding="utf-8")
@@ -200,7 +200,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
     maj = float(safe_get(config, ["targeted_consensus", "majority_threshold"], 0.7))
     minimap2_threads = int(safe_get(config, ["targeted_consensus", "minimap2_threads"], 4))
     samtools_threads = int(safe_get(config, ["targeted_consensus", "samtools_threads"], 4))
-    consensus_backend = str(safe_get(config, ["targeted_consensus", "consensus_backend"], "samtools")).lower()
+    consensus_backend = str(safe_get(config, ["targeted_consensus", "consensus_backend"], "count_coverage")).lower()
     max_reads = safe_get(config, ["targeted_consensus", "max_reads"], 10000)
     max_reads = None if max_reads in (None, "", "null") else int(max_reads)
     max_depth_pp = int(safe_get(config, ["targeted_consensus", "max_depth_per_position"], 1000))
@@ -274,18 +274,38 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
             t0 = perf_counter(); print(f"[targeted_consensus] target={tid} read_set={rs} step=sort")
             run_cmd(["samtools", "sort", "-@", str(samtools_threads), "-o", str(out_bam), str(sam)], check=False); el_sort = perf_counter() - t0
             t0 = perf_counter(); print(f"[targeted_consensus] target={tid} read_set={rs} step=index")
-            run_cmd(["samtools", "index", str(out_bam)], check=False); el_index = perf_counter() - t0
+            run_cmd(["samtools", "index", "-@", str(samtools_threads), str(out_bam)], check=False); el_index = perf_counter() - t0
             if sam.exists(): sam.unlink()
         else:
             print(f"[targeted_consensus] Reusing existing consensus for target={tid} read_set={rs}")
 
+        # filter
+        t0 = perf_counter()
+        filtered_bam = adir / "pool_to_local_ref.filtered.bam"
+        run_cmd(["samtools", "view", "-@", str(samtools_threads), "-b", "-q", str(min_mq), "-F", "2308", str(out_bam), "-o", str(filtered_bam)], check=False)
+        run_cmd(["samtools", "index", "-@", str(samtools_threads), str(filtered_bam)], check=False)
+        el_filter = perf_counter() - t0
+
         # pileup
         t0 = perf_counter(); print(f"[targeted_consensus] target={tid} read_set={rs} step=pileup")
-        aln = pysam.AlignmentFile(str(out_bam), "rb") if out_bam.exists() else None
+        aln = pysam.AlignmentFile(str(filtered_bam), "rb") if filtered_bam.exists() else None
         cons = []; depths = []
-        if consensus_backend == "samtools" and out_bam.exists():
+        if consensus_backend == "count_coverage" and aln is not None:
+            A, C, G, T = aln.count_coverage(tid, start=0, stop=len(local_seq), quality_threshold=min_bq)
+            for i in range(len(local_seq)):
+                a, c, g, t = int(A[i]), int(C[i]), int(G[i]), int(T[i])
+                depth = a + c + g + t
+                depths.append(depth)
+                if depth < min_depth:
+                    cons.append("N"); continue
+                cts = {"A": a, "C": c, "G": g, "T": t}
+                mb, mc = max(cts.items(), key=lambda x: x[1])
+                cons.append(mb if (mc / max(depth, 1)) >= maj else "N")
+            aln.close()
+        elif consensus_backend == "samtools" and filtered_bam.exists():
             mp = adir / "pileup.txt"
-            run_cmd(["bash", "-lc", f"samtools mpileup -aa -Q {min_bq} -q {min_mq} -d {max_depth_pp} -f {local_ref} {out_bam} > {mp}"], check=False)
+            print("[targeted_consensus] samtools mpileup does not support threads in this environment")
+            run_cmd(["bash", "-lc", f"samtools mpileup -aa -Q {min_bq} -q {min_mq} -d {max_depth_pp} -f {local_ref} {filtered_bam} > {mp}"], check=False)
             pos = {}
             if mp.exists():
                 with open(mp, "r", encoding="utf-8") as fh:
@@ -393,6 +413,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
         el_write = perf_counter() - t0
 
         b = best or {"best_orf_id": ".", "orf_start": ".", "orf_end": ".", "orf_strand": ".", "orf_frame": ".", "orf_length_nt": 0, "orf_length_aa": 0, "internal_stop_count": ".", "terminal_stop": "."}
+        comment_extra = "max_depth_per_position not applied by count_coverage backend" if consensus_backend == "count_coverage" else ""
         rows.append({"target_id": tid, "target_type": r.target_type, "gene": r.gene, "read_set": rs, "pool_type": pool_type, "consensus_backend": consensus_backend,
                      "reference_used": str(local_ref), "consensus_fasta": str(cfa / f"{tid}.{rs}.{pool_type}.consensus.fasta"),
                      "consensus_length": len(cseq), "n_bases": n_bases, "ambiguous_bases": cseq.count("N"),
@@ -405,10 +426,10 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
                      "percent_identity": pid, "aligned_coverage_consensus": covc, "aligned_coverage_reference": covr, "alignment_score": score,
                      "recommendation": recm, "priority": pri, "reads_available": reads_available, "reads_used_for_consensus": reads_used,
                      "downsampled": downsampled, "max_depth_per_position": max_depth_pp,
-                     "elapsed_prepare_s": round(el_prep,3), "elapsed_map_s": round(el_map,3), "elapsed_sort_s": round(el_sort,3), "elapsed_index_s": round(el_index,3),
+                     "elapsed_prepare_s": round(el_prep,3), "elapsed_map_s": round(el_map,3), "elapsed_sort_s": round(el_sort,3), "elapsed_index_s": round(el_index,3), "elapsed_filter_s": round(el_filter,3),
                      "elapsed_pileup_s": round(el_pile,3), "elapsed_orf_s": round(el_orf,3), "elapsed_reference_compare_s": round(el_ref,3),
                      "elapsed_write_s": round(el_write,3), "elapsed_total_s": round(perf_counter()-t_total,3),
-                     "comment": f"preset={preset}; type={rt}"})
+                     "comment": f"preset={preset}; type={rt}" + (f"; {comment_extra}" if comment_extra else "")})
         print(f"[targeted_consensus] target={tid} read_set={rs} step=done elapsed_s={round(perf_counter()-t_total,2)}")
 
     out_df = pd.DataFrame(rows, columns=cols)
