@@ -267,3 +267,6 @@ Parâmetros de desempenho:
 Para cobertura muito alta:
 - `max_reads` reduz reads **antes** do alinhamento (downsampling determinístico por tarefa),
 - `max_depth_per_position` limita profundidade no pileup (`pysam`) para acelerar consenso.
+
+`consensus_backend: samtools` é o backend recomendado para alta cobertura; `pysam` permanece disponível para depuração.
+`LOW_DEPTH_CONSENSUS` deve aparecer apenas quando a profundidade observada é realmente insuficiente (ex.: média abaixo do limiar, mínimo ~zero, ou ausência de bases informativas).

@@ -98,6 +98,7 @@ targeted_consensus:
   enabled: true
   pool_type: combined
   method: pileup
+  consensus_backend: samtools
   threads: 16
   jobs: 1
   minimap2_threads: 4
@@ -108,7 +109,7 @@ targeted_consensus:
   min_base_quality: 20
   min_mapping_quality: 20
   min_depth: 5
-  max_depth_per_position: 1000
+  max_depth_per_position: 500
   majority_threshold: 0.7
   max_reads: 10000
   random_seed: 42

@@ -150,6 +150,7 @@ targeted_consensus:
   enabled: true
   pool_type: combined
   method: pileup
+  consensus_backend: samtools
   threads: 16
   jobs: 1
   minimap2_threads: 8
@@ -163,6 +164,10 @@ targeted_consensus:
   majority_threshold: 0.7
   max_reads: 1000
   max_depth_per_position: 500
+  orf_scan_mode: best_orf
+  scan_six_frames: true
+  min_orf_nt: 150
+  max_orf_aa_factor: 1.5
   random_seed: 42
   compare_to_reference: true
   translate_consensus: true

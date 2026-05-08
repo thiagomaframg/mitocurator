@@ -113,6 +113,29 @@ def _align_metrics(query_aa: str, ref_aa: str):
     return pid, covq, covr, score
 
 
+def _parse_mpileup_bases(ref_base: str, bases: str):
+    counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+    i = 0
+    ref_base = ref_base.upper()
+    while i < len(bases):
+        c = bases[i]
+        if c == "^":
+            i += 2; continue
+        if c == "$":
+            i += 1; continue
+        if c in "+-":
+            i += 1
+            n = ""
+            while i < len(bases) and bases[i].isdigit():
+                n += bases[i]; i += 1
+            if n: i += int(n)
+            continue
+        b = ref_base if c in "., " else c.upper()
+        if b in counts: counts[b] += 1
+        i += 1
+    return counts
+
+
 def _reference_protein(config: dict, gene: str, code: int):
     ref = safe_get(config, ["reference", "genbank"], None) or safe_get(config, ["input", "reference_gb"], None)
     if not ref or not Path(ref).exists():
@@ -151,7 +174,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
     tsv_in = reconstruction_pools_dir / "reconstruction_pools.tsv"
     tsv_out = outdir / "targeted_consensus.tsv"
     md_out = outdir / "targeted_consensus.md"
-    cols = ["target_id","target_type","gene","read_set","pool_type","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
+    cols = ["target_id","target_type","gene","read_set","pool_type","consensus_backend","reference_used","consensus_fasta","consensus_length","n_bases","ambiguous_bases","ambiguous_fraction","mean_depth","min_depth","max_depth","best_orf_id","num_orfs_found","best_orf_selection_reason","orf_start","orf_end","orf_strand","orf_frame","orf_length_nt","orf_length_aa","internal_stop_count","terminal_stop","reference_gene","reference_aa_length","percent_identity","aligned_coverage_consensus","aligned_coverage_reference","alignment_score","recommendation","priority","reads_available","reads_used_for_consensus","downsampled","max_depth_per_position","elapsed_prepare_s","elapsed_map_s","elapsed_sort_s","elapsed_index_s","elapsed_pileup_s","elapsed_orf_s","elapsed_reference_compare_s","elapsed_write_s","elapsed_total_s","comment"]
     if not tsv_in.exists():
         pd.DataFrame(columns=cols).to_csv(tsv_out, sep="\t", index=False)
         md_out.write_text("# Targeted consensus\n\nNo reconstruction pools TSV found.\n", encoding="utf-8")
@@ -177,6 +200,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
     maj = float(safe_get(config, ["targeted_consensus", "majority_threshold"], 0.7))
     minimap2_threads = int(safe_get(config, ["targeted_consensus", "minimap2_threads"], 4))
     samtools_threads = int(safe_get(config, ["targeted_consensus", "samtools_threads"], 4))
+    consensus_backend = str(safe_get(config, ["targeted_consensus", "consensus_backend"], "samtools")).lower()
     max_reads = safe_get(config, ["targeted_consensus", "max_reads"], 10000)
     max_reads = None if max_reads in (None, "", "null") else int(max_reads)
     max_depth_pp = int(safe_get(config, ["targeted_consensus", "max_depth_per_position"], 1000))
@@ -259,7 +283,28 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
         t0 = perf_counter(); print(f"[targeted_consensus] target={tid} read_set={rs} step=pileup")
         aln = pysam.AlignmentFile(str(out_bam), "rb") if out_bam.exists() else None
         cons = []; depths = []
-        if aln is not None:
+        if consensus_backend == "samtools" and out_bam.exists():
+            mp = adir / "pileup.txt"
+            run_cmd(["bash", "-lc", f"samtools mpileup -aa -Q {min_bq} -q {min_mq} -d {max_depth_pp} -f {local_ref} {out_bam} > {mp}"], check=False)
+            pos = {}
+            if mp.exists():
+                with open(mp, "r", encoding="utf-8") as fh:
+                    for ln in fh:
+                        c = ln.rstrip("\n").split("\t")
+                        if len(c) < 5:
+                            continue
+                        p = int(c[1]) - 1
+                        depth = int(c[3]) if c[3].isdigit() else 0
+                        counts = _parse_mpileup_bases(c[2], c[4])
+                        pos[p] = (depth, counts)
+            for p, rb in enumerate(local_seq):
+                depth, cts = pos.get(p, (0, {"A": 0, "C": 0, "G": 0, "T": 0}))
+                depths.append(depth)
+                if depth < min_depth:
+                    cons.append("N"); continue
+                mb, mc = max(cts.items(), key=lambda x: x[1])
+                cons.append(mb if (mc/max(depth,1)) >= maj else "N")
+        elif aln is not None:
             for p in range(len(local_seq)):
                 countsA=countsC=countsG=countsT=0; depth=0
                 for col in aln.pileup(tid, p, p+1, truncate=True, stepper="all", max_depth=max_depth_pp):
@@ -321,11 +366,15 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
 
         # recommendation
         recm, pri = "MANUAL_REVIEW", "MEDIUM"
+        mean_depth_obs = statistics.mean(depths) if depths else 0
+        min_depth_obs = min(depths) if depths else 0
+        n_bases = len(cseq) - cseq.count("N")
+        amb_frac = (cseq.count("N")/len(cseq)) if cseq else 1
         if not best:
             recm = "NO_RELIABLE_CONSENSUS"
-        elif statistics.mean(depths) if depths else 0 < min_depth:
+        elif (mean_depth_obs < min_depth) or (min_depth_obs < 1) or (n_bases == 0):
             recm = "LOW_DEPTH_CONSENSUS"
-        elif (cseq.count("N")/len(cseq)) if cseq else 1 > 0.3:
+        elif amb_frac > 0.20:
             recm = "CONSENSUS_AMBIGUOUS"
         elif str(r.target_type) == "missing_gene_candidate":
             if pid != "." and float(pid) >= 40 and float(covr) >= 50 and best["internal_stop_count"] == 0:
@@ -344,11 +393,11 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
         el_write = perf_counter() - t0
 
         b = best or {"best_orf_id": ".", "orf_start": ".", "orf_end": ".", "orf_strand": ".", "orf_frame": ".", "orf_length_nt": 0, "orf_length_aa": 0, "internal_stop_count": ".", "terminal_stop": "."}
-        rows.append({"target_id": tid, "target_type": r.target_type, "gene": r.gene, "read_set": rs, "pool_type": pool_type,
+        rows.append({"target_id": tid, "target_type": r.target_type, "gene": r.gene, "read_set": rs, "pool_type": pool_type, "consensus_backend": consensus_backend,
                      "reference_used": str(local_ref), "consensus_fasta": str(cfa / f"{tid}.{rs}.{pool_type}.consensus.fasta"),
-                     "consensus_length": len(cseq), "n_bases": len(cseq)-cseq.count("N"), "ambiguous_bases": cseq.count("N"),
-                     "ambiguous_fraction": round((cseq.count("N")/len(cseq)) if cseq else 1,4), "mean_depth": round(statistics.mean(depths),2) if depths else 0,
-                     "min_depth": min(depths) if depths else 0, "max_depth": max(depths) if depths else 0,
+                     "consensus_length": len(cseq), "n_bases": n_bases, "ambiguous_bases": cseq.count("N"),
+                     "ambiguous_fraction": round(amb_frac,4), "mean_depth": round(mean_depth_obs,2) if depths else 0,
+                     "min_depth": min_depth_obs, "max_depth": max(depths) if depths else 0,
                      "best_orf_id": b["best_orf_id"], "num_orfs_found": len(orfs), "best_orf_selection_reason": reason,
                      "orf_start": b["orf_start"], "orf_end": b["orf_end"], "orf_strand": b["orf_strand"], "orf_frame": b["orf_frame"],
                      "orf_length_nt": b["orf_length_nt"], "orf_length_aa": b["orf_length_aa"], "internal_stop_count": b["internal_stop_count"],
