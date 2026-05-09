@@ -107,20 +107,92 @@ def _align_metrics(query_aa: str, ref_aa: str):
 
 
 def _load_target_regions(targeted_dir: Path):
+    """Load target regions robustly from targets.bed or targeted_read_extraction.tsv.
+
+    Supports:
+      1) BED-like: contig start0 end target_id
+      2) target-first: target_id contig start0 end
+
+    Skips headers such as: target_id, contig, start0, end.
+    """
     regions = {}
+
+    def _is_header(parts):
+        low = [str(x).strip().lower() for x in parts]
+        header_tokens = {
+            "target_id", "target", "gene",
+            "contig", "chrom", "seqid", "sequence",
+            "start", "start0", "start_0",
+            "end", "stop"
+        }
+        return any(x in header_tokens for x in low[:4])
+
+    def _add_region(parts):
+        if len(parts) < 4:
+            return
+        if _is_header(parts):
+            return
+
+        # Format A: contig start0 end target_id
+        try:
+            contig = str(parts[0]).strip()
+            start0 = int(parts[1])
+            end = int(parts[2])
+            target_id = str(parts[3]).strip()
+            regions[target_id] = (contig, start0, end)
+            return
+        except Exception:
+            pass
+
+        # Format B: target_id contig start0 end
+        try:
+            target_id = str(parts[0]).strip()
+            contig = str(parts[1]).strip()
+            start0 = int(parts[2])
+            end = int(parts[3])
+            regions[target_id] = (contig, start0, end)
+            return
+        except Exception:
+            return
+
     bed = targeted_dir / "targets.bed"
     if bed.exists():
-        for ln in bed.read_text(encoding="utf-8").splitlines():
-            if not ln.strip() or ln.startswith("#"):
-                continue
-            c, a, b, tid, *_ = (ln.split("	") + [".", ".", ".", "."])
-            regions[str(tid)] = (c, int(a), int(b))
+        with bed.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                _add_region(line.split("\t"))
+
+    # Fallback: targeted_read_extraction.tsv
     tsv = targeted_dir / "targeted_read_extraction.tsv"
     if tsv.exists():
-        df = pd.read_csv(tsv, sep="	").fillna(".")
-        for r in df.itertuples():
-            if str(r.target_id) not in regions and hasattr(r, "contig") and hasattr(r, "start") and hasattr(r, "end"):
-                regions[str(r.target_id)] = (str(r.contig), int(r.start), int(r.end))
+        try:
+            import pandas as pd
+            df = pd.read_csv(tsv, sep="\t")
+            cols = {c.lower(): c for c in df.columns}
+
+            tid_col = cols.get("target_id") or cols.get("target")
+            contig_col = cols.get("contig") or cols.get("seqid") or cols.get("chrom")
+            start_col = cols.get("start0") or cols.get("start") or cols.get("start_0")
+            end_col = cols.get("end") or cols.get("stop")
+
+            if tid_col and contig_col and start_col and end_col:
+                for _, row in df.iterrows():
+                    tid = str(row[tid_col])
+                    if tid in regions:
+                        continue
+                    try:
+                        regions[tid] = (
+                            str(row[contig_col]),
+                            int(row[start_col]),
+                            int(row[end_col]),
+                        )
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     return regions
 
 

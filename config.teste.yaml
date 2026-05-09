@@ -221,3 +221,25 @@ candidate_assembly:
 
   threads: 16
   reuse_existing_outputs: true
+
+candidate_assembly:
+  assembly_pool_strategy: mapped_mitogenome_plus_target
+  min_mapping_quality: 20
+  random_seed: 42
+
+  hifi_mitogenome_reads: 300
+  hifi_target_reads: 85
+
+  illumina_mitogenome_coverage: 250
+  illumina_target_coverage: 300
+  illumina_max_pairs_per_candidate: 20000
+  illumina_max_target_pairs_per_candidate: 5000
+
+  use_bam_sequences_for_fastq: true
+  recover_from_original_fastq: false
+
+  flye:
+    genome_size: 20k
+    extra_args: "--meta --min-overlap 1000"
+
+  tblastn_evalue: 1e-5
