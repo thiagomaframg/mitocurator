@@ -1,30 +1,71 @@
 from __future__ import annotations
 from pathlib import Path
+import gzip
+import random
 import shutil
 import pandas as pd
 from Bio import SeqIO
-from Bio.Seq import Seq
 
 from .utils import ensure_dir, safe_get, run_cmd, get_genetic_code
 from .io import read_record
 from .targeted_consensus import _reference_protein
 
-LONG_TYPES = {"hifi","pacbio_hifi","pacbio_clr","clr","ont","nanopore"}
-SHORT_TYPES = {"illumina","illumina_pe","pe","illumina_se","se"}
+LONG_TYPES = {"hifi", "pacbio_hifi", "pacbio_clr", "clr", "ont", "nanopore"}
+SHORT_TYPES = {"illumina", "illumina_pe", "pe", "illumina_se", "se"}
 
 
 def _type_from_readset(config, read_set):
-    for grp in (safe_get(config,["reads","long"],[]) or []) + (safe_get(config,["reads","short"],[]) or []):
+    for grp in (safe_get(config, ["reads", "long"], []) or []) + (safe_get(config, ["reads", "short"], []) or []):
         if isinstance(grp, dict) and str(grp.get("name")) == read_set:
-            return str(grp.get("type",""))
-    for rs in (safe_get(config,["read_support","read_sets"],[]) or []):
+            return str(grp.get("type", ""))
+    for rs in (safe_get(config, ["read_support", "read_sets"], []) or []):
         if str(rs.get("name")) == read_set:
-            return str(rs.get("type",""))
+            return str(rs.get("type", ""))
     n = read_set.lower()
-    if "illumina" in n: return "illumina_pe"
-    if "hifi" in n: return "pacbio_hifi"
-    if "ont" in n: return "ont"
+    if "illumina" in n:
+        return "illumina_pe"
+    if "hifi" in n:
+        return "pacbio_hifi"
+    if "ont" in n:
+        return "ont"
     return ""
+
+
+def _read_base_id(name: str) -> str:
+    nid = (name or "").split()[0]
+    if nid.endswith("/1") or nid.endswith("/2"):
+        nid = nid[:-2]
+    return nid
+
+
+def _pick_ids(ids, limit, rng):
+    if limit is None or limit < 0 or len(ids) <= limit:
+        return sorted(ids)
+    return sorted(rng.sample(list(ids), limit))
+
+
+def _collect_single_records(fastq_path: Path):
+    recs = {}
+    if not fastq_path or str(fastq_path) == "." or not Path(fastq_path).exists():
+        return recs
+    with gzip.open(fastq_path, "rt") if str(fastq_path).endswith(".gz") else open(fastq_path, "rt", encoding="utf-8") as h:
+        for rec in SeqIO.parse(h, "fastq"):
+            recs[_read_base_id(rec.id)] = rec
+    return recs
+
+
+def _collect_paired_records(r1_path: Path, r2_path: Path):
+    pairs = {}
+    if any((not p, str(p) == ".", not Path(p).exists()) for p in [r1_path, r2_path]):
+        return pairs
+    op1 = gzip.open(r1_path, "rt") if str(r1_path).endswith(".gz") else open(r1_path, "rt", encoding="utf-8")
+    op2 = gzip.open(r2_path, "rt") if str(r2_path).endswith(".gz") else open(r2_path, "rt", encoding="utf-8")
+    with op1 as h1, op2 as h2:
+        for a, b in zip(SeqIO.parse(h1, "fastq"), SeqIO.parse(h2, "fastq")):
+            ia, ib = _read_base_id(a.id), _read_base_id(b.id)
+            if ia == ib:
+                pairs[ia] = (a, b)
+    return pairs
 
 
 def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: Path, refinement_dir: Path, outdir: Path):
@@ -32,28 +73,30 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
     targets_tsv = outdir / "candidate_assembly_targets.tsv"
     sum_tsv = outdir / "candidate_assembly_summary.tsv"
     sum_md = outdir / "candidate_assembly_summary.md"
-    ca = safe_get(config,["candidate_assembly"],{}) or {}
-    src_mode = ca.get("candidate_source","cross_readset")
+    ca = safe_get(config, ["candidate_assembly"], {}) or {}
+    strategy = str(ca.get("assembly_pool_strategy", "targeted_plus_mitogenome"))
+    target_req = int(ca.get("max_target_reads_per_candidate", 85))
+    mito_req = int(ca.get("max_mitogenome_reads_per_candidate", 300))
+    rng = random.Random(int(ca.get("random_seed", 42)))
+
+    src_mode = ca.get("candidate_source", "cross_readset")
     cross = consensus_dir / "cross_readset_missing_gene_candidates.tsv"
     best = consensus_dir / "best_missing_gene_candidates.tsv"
     if src_mode == "cross_readset" and cross.exists():
-        cand = pd.read_csv(cross, sep="\t")
-        cand = cand.rename(columns={"combined_rank":"rank", "combined_recommendation":"recommendation"})
+        cand = pd.read_csv(cross, sep="\t").rename(columns={"combined_rank": "rank", "combined_recommendation": "recommendation"})
     elif best.exists():
-        cand = pd.read_csv(best, sep="\t")
-        cand = cand.rename(columns={"rank":"rank", "recommendation":"recommendation"})
+        cand = pd.read_csv(best, sep="\t").rename(columns={"rank": "rank", "recommendation": "recommendation"})
     else:
         pd.DataFrame().to_csv(targets_tsv, sep="\t", index=False)
         pd.DataFrame().to_csv(sum_tsv, sep="\t", index=False)
         sum_md.write_text("# Candidate assembly\n\nNo candidate source found.\n", encoding="utf-8")
         return outdir
 
-    inc = set(ca.get("include_recommendations", ["CROSS_READSET_GENE_CANDIDATE_SUPPORTED","CROSS_READSET_PARTIAL_GENE_CANDIDATE_SUPPORTED","SINGLE_READSET_GENE_CANDIDATE_SUPPORTED"]))
-    max_per_gene = int(ca.get("max_candidates_per_gene",1))
+    inc = set(ca.get("include_recommendations", ["CROSS_READSET_GENE_CANDIDATE_SUPPORTED", "CROSS_READSET_PARTIAL_GENE_CANDIDATE_SUPPORTED", "SINGLE_READSET_GENE_CANDIDATE_SUPPORTED"]))
+    max_per_gene = int(ca.get("max_candidates_per_gene", 1))
     cand = cand[cand["recommendation"].isin(inc)]
     if "rank" in cand.columns:
         cand = cand[cand["rank"] <= max_per_gene]
-    cand.to_csv(targets_tsv, sep="\t", index=False)
 
     pools = pd.read_csv(pools_dir / "reconstruction_pools.tsv", sep="\t") if (pools_dir / "reconstruction_pools.tsv").exists() else pd.DataFrame()
     rec, _ = read_record(refinement_dir / "refined.gb")
@@ -61,89 +104,181 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
     SeqIO.write([SeqIO.SeqRecord(rec.seq, id=rec.id, description="")], str(refined_fa), "fasta")
     run_cmd(["makeblastdb", "-in", str(refined_fa), "-dbtype", "nucl"], check=False)
     threads = int(ca.get("threads", 16))
-    min_len = int(ca.get("min_contig_len",300))
+    min_len = int(ca.get("min_contig_len", 300))
     code = get_genetic_code(config, default=5)
 
     rows = []
+    target_rows = []
     for rr in cand.itertuples():
-        gene = str(rr.gene); tid = str(rr.target_id)
+        gene = str(rr.gene)
+        tid = str(rr.target_id)
         base = ensure_dir(outdir / gene / tid)
-        ad = ensure_dir(base / "assembly"); bd = ensure_dir(base / "blast"); dd = ensure_dir(base / "diagnosis")
-        subset = pools[(pools["target_id"].astype(str)==tid) & (pools["pool_type"].astype(str)=="combined")]
-        for pr in subset.itertuples():
-            rs = str(pr.read_set); rtype = _type_from_readset(config, rs)
-            asm_fa = None; assembler = None; status = "ASSEMBLY_NOT_RUN"
+        ad = ensure_dir(base / "assembly")
+        bd = ensure_dir(base / "blast")
+        dd = ensure_dir(base / "diagnosis")
+        rd = ensure_dir(base / "reads_downsampled")
+        subset = pools[(pools["target_id"].astype(str) == tid)]
+        read_sets = sorted(set(subset["read_set"].astype(str)))
+
+        for rs in read_sets:
+            rs_sub = subset[subset["read_set"].astype(str) == rs]
+            target_only = rs_sub[rs_sub["pool_type"].astype(str) == "target_only"]
+            mito_only = rs_sub[rs_sub["pool_type"].astype(str) == "mitogenome_mapped"]
+            combined = rs_sub[rs_sub["pool_type"].astype(str) == "combined"]
+            rtype = _type_from_readset(config, rs)
+            assembler = None
+            asm_fa = None
+            status = "ASSEMBLY_NOT_RUN"
+            in_fastq = in_r1 = in_r2 = "."
+
+            t_avail = m_avail = t_used = m_used = dedup_rm = final_used = 0
+            if strategy == "targeted_plus_mitogenome":
+                if rtype in LONG_TYPES or rtype in {"illumina_se", "se"}:
+                    tref = target_only.iloc[0] if not target_only.empty else None
+                    mref = mito_only.iloc[0] if not mito_only.empty else None
+                    t_records = _collect_single_records(Path(str(tref.output_fastq))) if tref is not None else {}
+                    m_records = _collect_single_records(Path(str(mref.output_fastq))) if mref is not None else {}
+                    t_ids, m_ids = set(t_records.keys()), set(m_records.keys())
+                    t_avail, m_avail = len(t_ids), len(m_ids)
+                    sel_t = _pick_ids(t_ids, target_req, rng)
+                    sel_m = _pick_ids(m_ids, mito_req, rng)
+                    chosen = {}
+                    for i in sel_t:
+                        chosen[i] = t_records[i]
+                    for i in sel_m:
+                        if i not in chosen:
+                            chosen[i] = m_records[i]
+                    t_used = len(set(sel_t))
+                    m_used = len([i for i in sel_m if i not in set(sel_t)])
+                    dedup_rm = len(sel_t) + len(sel_m) - len(chosen)
+                    final_used = len(chosen)
+                    if chosen:
+                        in_fastq = str(rd / f"{tid}.{rs}.target85_mito300.fastq.gz")
+                        with gzip.open(in_fastq, "wt") as oh:
+                            SeqIO.write([chosen[i] for i in sorted(chosen.keys())], oh, "fastq")
+                elif rtype in SHORT_TYPES:
+                    pref_t = target_only.iloc[0] if not target_only.empty else None
+                    pref_m = mito_only.iloc[0] if not mito_only.empty else None
+                    t_pairs = _collect_paired_records(Path(str(pref_t.output_fastq_r1)), Path(str(pref_t.output_fastq_r2))) if pref_t is not None and str(pref_t.output_format) == "paired_fastq" else {}
+                    m_pairs = _collect_paired_records(Path(str(pref_m.output_fastq_r1)), Path(str(pref_m.output_fastq_r2))) if pref_m is not None and str(pref_m.output_format) == "paired_fastq" else {}
+                    t_ids, m_ids = set(t_pairs.keys()), set(m_pairs.keys())
+                    t_avail, m_avail = len(t_ids), len(m_ids)
+                    sel_t = _pick_ids(t_ids, target_req, rng)
+                    sel_m = _pick_ids(m_ids, mito_req, rng)
+                    chosen = {}
+                    for i in sel_t:
+                        chosen[i] = t_pairs[i]
+                    for i in sel_m:
+                        if i not in chosen:
+                            chosen[i] = m_pairs[i]
+                    t_used = len(set(sel_t))
+                    m_used = len([i for i in sel_m if i not in set(sel_t)])
+                    dedup_rm = len(sel_t) + len(sel_m) - len(chosen)
+                    final_used = len(chosen)
+                    if chosen:
+                        in_r1 = str(rd / f"{tid}.{rs}.target85_mito300_R1.fastq.gz")
+                        in_r2 = str(rd / f"{tid}.{rs}.target85_mito300_R2.fastq.gz")
+                        with gzip.open(in_r1, "wt") as h1, gzip.open(in_r2, "wt") as h2:
+                            SeqIO.write([chosen[i][0] for i in sorted(chosen.keys())], h1, "fastq")
+                            SeqIO.write([chosen[i][1] for i in sorted(chosen.keys())], h2, "fastq")
+
             if rtype in LONG_TYPES and bool(ca.get("run_long_read_assembly", True)):
-                assembler = "flye"
-                inp = str(pr.output_fastq)
-                if inp and inp != ".":
+                assembler = str(ca.get("long_read_assembler", "flye"))
+                if in_fastq != ".":
                     mode = "--pacbio-hifi" if "hifi" in rtype else "--pacbio-raw" if "clr" in rtype else "--nano-hq"
                     outd = ad / f"flye_{rs}"
-                    run_cmd(["bash","-lc",f"flye {mode} {inp} --out-dir {outd} --threads {threads} --genome-size {safe_get(config,['candidate_assembly','flye','genome_size'],'20k')} {safe_get(config,['candidate_assembly','flye','extra_args'],'')}"], check=False)
+                    run_cmd(["bash", "-lc", f"flye {mode} {in_fastq} --out-dir {outd} --threads {threads} --genome-size {safe_get(config,['candidate_assembly','flye','genome_size'],'20k')} {safe_get(config,['candidate_assembly','flye','extra_args'],'')}"], check=False)
                     asm = outd / "assembly.fasta"
                     if asm.exists():
-                        asm_fa = ad / f"{tid}.{rs}.flye.fasta"; shutil.copyfile(asm, asm_fa); status = "OK"
+                        asm_fa = ad / f"{tid}.{rs}.flye.fasta"
+                        shutil.copyfile(asm, asm_fa)
+                        status = "OK"
                     else:
                         status = "ASSEMBLY_FAILED"
                 else:
                     status = "NO_INPUT_READS"
             elif rtype in SHORT_TYPES and bool(ca.get("run_short_read_assembly", True)):
-                assembler = "spades"
+                assembler = str(ca.get("short_read_assembler", "spades"))
                 outd = ad / f"spades_{rs}"
-                if str(pr.output_format) == "paired_fastq" and str(pr.output_fastq_r1)!="." and str(pr.output_fastq_r2)!=".":
-                    cmd = f"spades.py -1 {pr.output_fastq_r1} -2 {pr.output_fastq_r2} -o {outd} --threads {threads} {safe_get(config,['candidate_assembly','spades','extra_args'],'')}"
+                if in_r1 != "." and in_r2 != ".":
+                    cmd = f"spades.py -1 {in_r1} -2 {in_r2} -o {outd} --threads {threads} {safe_get(config,['candidate_assembly','spades','extra_args'],'')}"
+                elif in_fastq != ".":
+                    cmd = f"spades.py -s {in_fastq} -o {outd} --threads {threads} {safe_get(config,['candidate_assembly','spades','extra_args'],'')}"
                 else:
-                    cmd = f"spades.py -s {pr.output_fastq} -o {outd} --threads {threads} {safe_get(config,['candidate_assembly','spades','extra_args'],'')}"
-                run_cmd(["bash","-lc",cmd], check=False)
-                asm = outd / "contigs.fasta"
-                if asm.exists():
-                    asm_fa = ad / f"{tid}.{rs}.spades.fasta"; shutil.copyfile(asm, asm_fa); status = "OK"
+                    cmd = None
+                if cmd:
+                    run_cmd(["bash", "-lc", cmd], check=False)
+                    asm = outd / "contigs.fasta"
+                    if asm.exists():
+                        asm_fa = ad / f"{tid}.{rs}.spades.fasta"
+                        shutil.copyfile(asm, asm_fa)
+                        status = "OK"
+                    else:
+                        status = "ASSEMBLY_FAILED"
                 else:
-                    status = "ASSEMBLY_FAILED"
+                    status = "NO_INPUT_READS"
             else:
                 status = "ASSEMBLER_NOT_AVAILABLE"
 
-            best_contig = "."; best_len = 0; bident = bqcov = bsstart = bsend = "."; tbpid=tbqcov=tbscov=tbbs="."
+            best_contig = "."
+            best_len = 0
+            bident = bqcov = bsstart = bsend = "."
+            tbpid = tbqcov = tbscov = tbbs = "."
             recm = "NO_LOCAL_ASSEMBLY_SUPPORT"
             if asm_fa and Path(asm_fa).exists():
                 sel = ad / "selected_candidate_contigs.fasta"
-                kept = []
-                for s in SeqIO.parse(str(asm_fa), "fasta"):
-                    if len(s.seq) >= min_len:
-                        kept.append(s)
+                kept = [s for s in SeqIO.parse(str(asm_fa), "fasta") if len(s.seq) >= min_len]
                 if kept:
                     SeqIO.write(kept, str(sel), "fasta")
-                    for k in kept:
-                        if len(k.seq) > best_len:
-                            best_len = len(k.seq); best_contig = k.id
-                    # blastn
+                    k = max(kept, key=lambda x: len(x.seq))
+                    best_len, best_contig = len(k.seq), k.id
                     b6 = bd / "blastn_vs_refined_mitogenome.tsv"
-                    run_cmd(["blastn","-query",str(sel),"-db",str(refined_fa),"-outfmt","6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen","-evalue",str(ca.get('blastn_evalue','1e-10')),"-num_threads",str(threads),"-out",str(b6)], check=False)
-                    if b6.exists() and b6.stat().st_size>0:
-                        bdf = pd.read_csv(b6, sep="\t", header=None)
-                        x = bdf.iloc[0]; bident = float(x[2]); qlen = float(x[12]); bqcov = round(100*float(x[3])/max(qlen,1),2); bsstart = int(x[8]); bsend = int(x[9])
-                    # tblastn
+                    run_cmd(["blastn", "-query", str(sel), "-db", str(refined_fa), "-outfmt", "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen", "-evalue", str(ca.get("blastn_evalue", "1e-10")), "-num_threads", str(threads), "-out", str(b6)], check=False)
+                    if b6.exists() and b6.stat().st_size > 0:
+                        x = pd.read_csv(b6, sep="\t", header=None).iloc[0]
+                        bident = float(x[2]); qlen = float(x[12]); bqcov = round(100 * float(x[3]) / max(qlen, 1), 2); bsstart = int(x[8]); bsend = int(x[9])
                     refaa = _reference_protein(config, gene, code)
                     if refaa:
                         qfaa = bd / f"reference_{gene}.faa"
-                        with open(qfaa,"w",encoding="utf-8") as f: f.write(f">{gene}\n{refaa}\n")
-                        run_cmd(["makeblastdb","-in",str(sel),"-dbtype","nucl"], check=False)
+                        with open(qfaa, "w", encoding="utf-8") as f:
+                            f.write(f">{gene}\n{refaa}\n")
+                        run_cmd(["makeblastdb", "-in", str(sel), "-dbtype", "nucl"], check=False)
                         t6 = bd / "tblastn_reference_protein_vs_candidate_assembly.tsv"
-                        run_cmd(["tblastn","-query",str(qfaa),"-db",str(sel),"-outfmt","6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen","-evalue",str(ca.get('tblastn_evalue','1e-5')),"-num_threads",str(threads),"-out",str(t6)], check=False)
-                        if t6.exists() and t6.stat().st_size>0:
-                            tdf = pd.read_csv(t6, sep="\t", header=None)
-                            y=tdf.iloc[0]; tbpid=float(y[2]); qlen=float(y[12]); slen=float(y[13]); al=float(y[3]); tbqcov=round(100*al/max(qlen,1),2); tbscov=round(100*al/max(slen,1),2); tbbs=float(y[11])
-                    # recommendation
-                    if tbpid != "." and tbqcov != "." and tbpid >= float(ca.get('tblastn_min_identity',25)) and tbqcov >= float(ca.get('tblastn_min_coverage',25)):
+                        run_cmd(["tblastn", "-query", str(qfaa), "-db", str(sel), "-outfmt", "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen", "-evalue", str(ca.get("tblastn_evalue", "1e-5")), "-num_threads", str(threads), "-out", str(t6)], check=False)
+                        if t6.exists() and t6.stat().st_size > 0:
+                            y = pd.read_csv(t6, sep="\t", header=None).iloc[0]
+                            tbpid = float(y[2]); qlen = float(y[12]); slen = float(y[13]); al = float(y[3]); tbqcov = round(100 * al / max(qlen, 1), 2); tbscov = round(100 * al / max(slen, 1), 2); tbbs = float(y[11])
+                    if tbpid != "." and tbqcov != "." and tbpid >= float(ca.get("tblastn_min_identity", 25)) and tbqcov >= float(ca.get("tblastn_min_coverage", 25)):
                         recm = "LOCAL_ASSEMBLY_SUPPORTS_MISSING_GENE"
-                        if bqcov != "." and bqcov < float(ca.get('blastn_min_coverage',30)):
+                        if bqcov != "." and bqcov < float(ca.get("blastn_min_coverage", 30)):
                             recm = "LOCAL_ASSEMBLY_SUGGESTS_MITOGENOME_ERROR"
                     elif tbpid != ".":
                         recm = "LOCAL_ASSEMBLY_NEEDS_REVIEW"
-            row = {"gene":gene,"target_id":tid,"read_set":rs,"assembler":assembler or ".","assembly_fasta":str(asm_fa) if asm_fa else ".","best_contig_id":best_contig,"best_contig_len":best_len,"blastn_best_hit_refined_seqid":rec.id if bident != "." else ".","blastn_best_pident":bident,"blastn_best_qcov":bqcov,"blastn_best_sstart":bsstart,"blastn_best_send":bsend,"tblastn_best_pident":tbpid,"tblastn_best_query_coverage":tbqcov,"tblastn_best_subject_coverage":tbscov,"tblastn_best_bitscore":tbbs,"reference_protein_length":len(_reference_protein(config,gene,code) or ""),"candidate_region_status":status,"recommendation":recm,"comment":"diagnostic-only"}
+
+            row = {
+                "gene": gene, "target_id": tid, "read_set": rs,
+                "assembly_pool_strategy": strategy,
+                "target_reads_requested": target_req, "target_reads_available": t_avail, "target_reads_used": t_used,
+                "mitogenome_reads_requested": mito_req, "mitogenome_reads_available": m_avail, "mitogenome_reads_used": m_used,
+                "duplicated_reads_removed": dedup_rm, "final_reads_used_for_assembly": final_used,
+                "assembly_input_fastq": in_fastq, "assembly_input_r1": in_r1, "assembly_input_r2": in_r2,
+                "assembler": assembler or ".", "assembly_fasta": str(asm_fa) if asm_fa else ".",
+                "best_contig_id": best_contig, "best_contig_len": best_len,
+                "blastn_best_hit_refined_seqid": rec.id if bident != "." else ".", "blastn_best_pident": bident,
+                "blastn_best_qcov": bqcov, "blastn_best_sstart": bsstart, "blastn_best_send": bsend,
+                "tblastn_best_pident": tbpid, "tblastn_best_query_coverage": tbqcov, "tblastn_best_subject_coverage": tbscov,
+                "tblastn_best_bitscore": tbbs, "reference_protein_length": len(_reference_protein(config, gene, code) or ""),
+                "candidate_region_status": status, "recommendation": recm, "comment": "diagnostic-only",
+            }
             rows.append(row)
+            target_rows.append({k: row[k] for k in [
+                "gene", "target_id", "read_set", "assembly_pool_strategy", "target_reads_requested", "target_reads_available", "target_reads_used",
+                "mitogenome_reads_requested", "mitogenome_reads_available", "mitogenome_reads_used", "duplicated_reads_removed",
+                "final_reads_used_for_assembly", "assembly_input_fastq", "assembly_input_r1", "assembly_input_r2"
+            ]})
             pd.DataFrame([row]).to_csv(dd / "candidate_gene_diagnosis.tsv", sep="\t", index=False)
 
+    pd.DataFrame(target_rows).to_csv(targets_tsv, sep="\t", index=False)
     sdf = pd.DataFrame(rows)
     sdf.to_csv(sum_tsv, sep="\t", index=False)
     with open(sum_md, "w", encoding="utf-8") as md:
@@ -151,14 +286,14 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
         if sdf.empty:
             md.write("No candidate assemblies generated.\n")
         else:
-            for g, grp in sdf.groupby("gene"):
-                best = grp.iloc[0]
-                md.write(f"## {g}\n\n")
-                md.write(f"- best candidate: {best['target_id']}\n")
-                md.write(f"- read_sets used: {','.join(sorted(set(grp['read_set'].astype(str))))}\n")
-                md.write(f"- contigs montados: {int((grp['best_contig_len']>0).sum())}\n")
-                md.write(f"- melhor tblastn pident: {best['tblastn_best_pident']}\n")
-                md.write(f"- melhor blastn pident: {best['blastn_best_pident']}\n")
-                md.write(f"- recomendação: {best['recommendation']}\n\n")
+            for r in sdf.itertuples():
+                md.write(f"## {r.gene} :: {r.target_id} :: {r.read_set}\n\n")
+                md.write(f"- strategy: {r.assembly_pool_strategy}\n")
+                md.write(f"- target_only usadas: {r.target_reads_used}/{r.target_reads_available} (req={r.target_reads_requested})\n")
+                md.write(f"- mitogenome usadas: {r.mitogenome_reads_used}/{r.mitogenome_reads_available} (req={r.mitogenome_reads_requested})\n")
+                md.write(f"- duplicatas removidas: {r.duplicated_reads_removed}\n")
+                md.write(f"- reads finais para montagem: {r.final_reads_used_for_assembly}\n")
+                md.write(f"- status: {r.candidate_region_status}\n")
+                md.write(f"- recomendação: {r.recommendation}\n\n")
         md.write("Nenhum GenBank foi alterado nesta etapa.\n")
     return outdir

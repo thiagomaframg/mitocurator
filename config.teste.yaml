@@ -172,3 +172,52 @@ targeted_consensus:
   compare_to_reference: true
   translate_consensus: true
   reuse_existing_outputs: true
+
+candidate_assembly:
+  enabled: true
+  candidate_source: cross_readset
+  max_candidates_per_gene: 1
+  include_recommendations:
+    - CROSS_READSET_GENE_CANDIDATE_SUPPORTED
+    - CROSS_READSET_PARTIAL_GENE_CANDIDATE_SUPPORTED
+    - SINGLE_READSET_GENE_CANDIDATE_SUPPORTED
+
+  run_long_read_assembly: true
+  run_short_read_assembly: true
+  run_hybrid_assembly: false
+
+  long_read_assembler: flye
+  short_read_assembler: spades
+
+  read_sets:
+    - hifi
+    - illumina
+
+  prefer_read_sets:
+    - hifi
+    - illumina
+
+  flye:
+    mode_hifi: --pacbio-hifi
+    mode_clr: --pacbio-raw
+    mode_ont: --nano-hq
+    genome_size: 20k
+    extra_args: "--meta"
+
+  spades:
+    mode: isolate
+    extra_args: ""
+
+  min_contig_len: 300
+  max_contigs_to_keep: 20
+
+  blastn_evalue: 1e-10
+  blastn_min_identity: 70
+  blastn_min_coverage: 30
+
+  tblastn_evalue: 1e-5
+  tblastn_min_identity: 25
+  tblastn_min_coverage: 25
+
+  threads: 16
+  reuse_existing_outputs: true

@@ -132,3 +132,16 @@ mitofinder:
 #   illumina_reads:
 #     r1: /path/R1.fq.gz
 #     r2: /path/R2.fq.gz
+
+candidate_assembly:
+  enabled: true
+  candidate_source: cross_readset
+  assembly_pool_strategy: targeted_plus_mitogenome
+  max_mitogenome_reads_per_candidate: 300
+  max_target_reads_per_candidate: 85
+  random_seed: 42
+  run_long_read_assembly: true
+  run_short_read_assembly: true
+  run_hybrid_assembly: false
+  long_read_assembler: flye
+  short_read_assembler: spades

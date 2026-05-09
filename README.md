@@ -272,3 +272,13 @@ Para cobertura muito alta:
 
 `consensus_backend: samtools` é o backend recomendado para alta cobertura; `pysam` permanece disponível para depuração.
 `LOW_DEPTH_CONSENSUS` deve aparecer apenas quando a profundidade observada é realmente insuficiente (ex.: média abaixo do limiar, mínimo ~zero, ou ausência de bases informativas).
+
+## Etapa `11_candidate_assembly/`
+A montagem local de candidatos usa por padrão um pool controlado (`assembly_pool_strategy: targeted_plus_mitogenome`) por candidato/read_set:
+
+- até **85 reads target_only** (enriquecimento específico do gene candidato),
+- até **300 reads mitogenome_mapped** (contexto do mitogenoma completo).
+
+Total alvo: até **385 reads** por candidato/read_set, com deduplicação por `read_id` e seed reproduzível (`random_seed`).
+
+Isso reduz ruído e tempo de montagem em regiões candidatas pequenas, mantendo evidência de contexto global + sinal local.
