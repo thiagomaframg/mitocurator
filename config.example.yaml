@@ -63,6 +63,14 @@ read_support:
   force_remap: false
   min_base_quality: 20
   min_mapping_quality: 20
+  recover_from_original_fastq: false
+  use_bam_sequences_for_fastq: true
+  illumina_max_target_pairs_per_candidate: 5000
+  illumina_max_pairs_per_candidate: 20000
+  illumina_target_coverage: 300
+  illumina_mitogenome_coverage: 250
+  hifi_target_reads: 85
+  hifi_mitogenome_reads: 300
   flank_bp: 20
   read_sets:
     - name: hifi
