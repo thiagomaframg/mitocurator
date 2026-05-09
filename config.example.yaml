@@ -1,94 +1,147 @@
-# MitoCurator configuration file
-#
-# IMPORTANT:
-# Always use absolute/full paths for input files, references, reads,
-# external tools and output directories.
-#
-# IMPORTANTE:
-# Use sempre caminhos completos/absolutos para arquivos de entrada,
-# referências, reads, ferramentas externas e diretórios de saída.
-#
-# Evite caminhos relativos, pois o pipeline cria subdiretórios internos
-# e algumas ferramentas externas podem ser chamadas a partir de outros
-# diretórios de trabalho.
-
 project:
-  name: Mcapixaba_mitocurator
+  output_prefix: Mcapixaba_test1
+  output_base_dir: /path/to/output_base
   organism: "Melipona capixaba"
-  topology: circular          # circular, linear, unknown
-  genetic_code: 5            # 5=invertebrate mitochondrial; 2=vertebrate mitochondrial
-  rotate_to: COX1            # gene inicial definido pelo usuário
+  topology: circular
+  genetic_code: 5
+  rotate_to: ND6
 
 input:
-  mitogenome: /full/path/to/candidate_mitogenome.gb
-  reference_gb: /full/path/to/reference_mitogenome.gb
+  mitogenome: /path/to/final_mitogenome.fasta
 
-output:
-  outdir: /full/path/to/mitocurator_output
+reference:
+  genbank: /path/to/reference.gb
 
 reads:
-  hifi:
-  pacbio_clr:
-  ont:
-  illumina_r1:
-  illumina_r2:
-  illumina_se:
+  long:
+    - name: hifi
+      type: pacbio_hifi
+      reads:
+        - /path/hifi.fastq.gz
+    - name: ont
+      type: ont
+      reads:
+        - /path/ont.fastq.gz
+    - name: pacbio_clr
+      type: pacbio_clr
+      reads:
+        - /path/clr.fastq.gz
+  short:
+    - name: illumina
+      type: illumina_pe
+      r1: /path/R1.fq.gz
+      r2: /path/R2.fq.gz
+    - name: illumina_se
+      type: illumina_se
+      reads:
+        - /path/SE.fq.gz
+
+profiles:
+  expected_gene_set: metazoa_mito
+  gene_name_profile: insect_mito
 
 threads:
   total: 64
   mitofinder: 32
-  blast: 48
-  minimap2: 48
-  samtools_view: 8
+  minimap2: 32
   samtools_sort: 16
-  bcftools: 16
-  mafft: 8
-  report: 4
 
-tools:
-  minimap2: minimap2
-  samtools: samtools
-  bcftools: bcftools
-  blastn: blastn
-  tblastn: tblastn
-  blastp: blastp
-  mafft: mafft
-  seqkit: seqkit
-  arwen: arwen
+refinement:
+  enabled: true
+  expected_gene_set:
+    profile: metazoa_mito
+    custom_file: null
+  gene_name_profile: insect_mito
+  annotate_at_rich: true
+  at_rich_min_len: 500
+  at_rich_min_at: 75.0
 
-  mitofinder:
-    enabled: true
+read_support:
+  enabled: true
+  threads: 8
+  reuse_existing_bam: true
+  force_remap: false
+  min_base_quality: 20
+  min_mapping_quality: 20
+  flank_bp: 20
+  read_sets:
+    - name: hifi
+      type: pacbio_hifi
+      source: reads.long.0.reads
+    - name: illumina
+      type: illumina_pe
+      source: reads.short.0
 
-    # Options:
-    #   python_interpreter
-    #   conda_env
-    #   wrapper
-    mode: python_interpreter
+targeted_extraction:
+  enabled: true
+  flank_bp: 3000
+  include_missing_gene_candidates: true
+  include_problematic_cds: true
+  include_consensus_correction_candidates: true
+  max_reads_per_target: 5000
+  min_mapping_quality: 20
+  reuse_existing_outputs: true
+  random_seed: 42
 
-    # Used only when mode: python_interpreter
-    # Example: /usr/bin/python2.7
-    python2: /usr/bin/python2.7
-    script: /full/path/to/MitoFinder/mitofinder
+reconstruction_pools:
+  enabled: true
+  make_target_only: true
+  make_mitogenome_mapped: true
+  make_combined: true
+  max_long_reads_per_pool: 10000
+  max_short_pairs_per_pool: 20000
+  min_mapping_quality: 20
+  random_seed: 42
+  reuse_existing_outputs: true
 
-    # Used only when mode: conda_env
-    conda_executable: /full/path/to/conda
-    conda_env: mitofinder_py2
+targeted_consensus:
+  enabled: true
+  pool_type: combined
+  method: pileup
+  consensus_backend: samtools
+  threads: 16
+  jobs: 1
+  minimap2_threads: 4
+  samtools_threads: 4
+  target_filter: null
+  read_set_filter: null
+  max_targets: null
+  min_base_quality: 20
+  min_mapping_quality: 20
+  min_depth: 5
+  max_depth_per_position: 500
+  majority_threshold: 0.7
+  max_reads: 10000
+  random_seed: 42
+  compare_to_reference: true
+  translate_consensus: true
+  reuse_existing_outputs: true
 
-    # Used only when mode: wrapper
-    wrapper: /full/path/to/run_mitofinder.sh
+# Advanced/compatibility options
+output:
+  outdir: /path/explicit_outdir
 
-annotation:
-  run_mitofinder: true
-  run_arwen: true
-  run_mitfi: true
-  run_trnascan: false
+mitofinder:
+  reference_gb: /path/legacy_reference.gb
 
-qc:
-  major_overlap_bp: 20
-  low_coverage_threshold: 5
-  flag_internal_stops: true
-  flag_truncated_genes: true
+# legacy read_support format (compat)
+# read_support:
+#   use_hifi: true
+#   hifi_reads: [/path/hifi.fastq.gz]
+#   use_illumina: true
+#   illumina_reads:
+#     r1: /path/R1.fq.gz
+#     r2: /path/R2.fq.gz
 
-report:
-  markdown: true
-  tsv: true
+candidate_assembly:
+  enabled: true
+  candidate_source: cross_readset
+  assembly_pool_strategy: targeted_plus_mitogenome
+  max_mitogenome_reads_per_candidate: 300
+  max_target_reads_per_candidate: 85
+  random_seed: 42
+  run_long_read_assembly: true
+  run_short_read_assembly: true
+  run_hybrid_assembly: false
+  long_read_assembler: flye
+  short_read_assembler: spades
