@@ -107,20 +107,81 @@ def _align_metrics(query_aa: str, ref_aa: str):
 
 
 def _load_target_regions(targeted_dir: Path):
+    """Load target regions robustly from targets.bed or targeted_read_extraction.tsv.
+
+    Supports:
+      1) BED-like: contig start0 end target_id
+      2) target-first: target_id contig start0 end
+
+    Skips headers such as: target_id, contig, start0, end.
+    """
     regions = {}
+
+    def _add_region(parts):
+        if len(parts) < 4:
+            return
+
+        low = [x.strip().lower() for x in parts[:4]]
+        header_tokens = {"target_id", "target", "gene", "contig", "chrom", "seqid", "start", "start0", "start_0", "end"}
+        if any(x in header_tokens for x in low):
+            return
+
+        # BED-like: contig start end target_id
+        try:
+            contig = parts[0].strip()
+            start0 = int(parts[1])
+            end = int(parts[2])
+            target_id = parts[3].strip()
+            regions[str(target_id)] = (contig, start0, end)
+            return
+        except Exception:
+            pass
+
+        # target-first: target_id contig start end
+        try:
+            target_id = parts[0].strip()
+            contig = parts[1].strip()
+            start0 = int(parts[2])
+            end = int(parts[3])
+            regions[str(target_id)] = (contig, start0, end)
+            return
+        except Exception:
+            return
+
     bed = targeted_dir / "targets.bed"
     if bed.exists():
-        for ln in bed.read_text(encoding="utf-8").splitlines():
-            if not ln.strip() or ln.startswith("#"):
-                continue
-            c, a, b, tid, *_ = (ln.split("	") + [".", ".", ".", "."])
-            regions[str(tid)] = (c, int(a), int(b))
+        with bed.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                _add_region(line.split("\t"))
+
+    # Fallback: targeted_read_extraction.tsv
     tsv = targeted_dir / "targeted_read_extraction.tsv"
     if tsv.exists():
-        df = pd.read_csv(tsv, sep="	").fillna(".")
-        for r in df.itertuples():
-            if str(r.target_id) not in regions and hasattr(r, "contig") and hasattr(r, "start") and hasattr(r, "end"):
-                regions[str(r.target_id)] = (str(r.contig), int(r.start), int(r.end))
+        try:
+            import pandas as pd
+            df = pd.read_csv(tsv, sep="\t")
+            cols = {c.lower(): c for c in df.columns}
+
+            tid_col = cols.get("target_id") or cols.get("target")
+            contig_col = cols.get("contig") or cols.get("seqid") or cols.get("chrom")
+            start_col = cols.get("start0") or cols.get("start") or cols.get("start_0")
+            end_col = cols.get("end") or cols.get("stop")
+
+            if tid_col and contig_col and start_col and end_col:
+                for _, row in df.iterrows():
+                    tid = str(row[tid_col])
+                    if tid in regions:
+                        continue
+                    try:
+                        regions[tid] = (str(row[contig_col]), int(row[start_col]), int(row[end_col]))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     return regions
 
 
@@ -149,6 +210,64 @@ def _select_read_ids_from_bam(bam_path: Path, region, max_reads: int, min_mappin
     for i, r in enumerate(rows, 1):
         r["selected_order"] = i
     return rows
+
+
+def normalize_read_id(header_or_id: str) -> str:
+    x = str(header_or_id or "").strip()
+    if x.startswith("@"):
+        x = x[1:]
+    x = x.split()[0]
+    if x.endswith("/1") or x.endswith("/2"):
+        x = x[:-2]
+    return x
+
+
+def _iter_fastq(path: Path):
+    with gzip.open(path, "rt") if str(path).endswith(".gz") else open(path, "rt", encoding="utf-8") as h:
+        yield from SeqIO.parse(h, "fastq")
+
+
+def _as_list(v):
+    if v is None: return []
+    if isinstance(v, list): return [str(x) for x in v]
+    return [str(v)]
+
+
+def _recover_single_from_sources(selected_ids, paths, out_fastq):
+    found = {}
+    for p in [Path(x) for x in paths if x and x != "."]:
+        if not p.exists():
+            continue
+        for rec in _iter_fastq(p):
+            rid = normalize_read_id(rec.description or rec.id)
+            if rid in selected_ids and rid not in found:
+                found[rid] = rec
+                if len(found) == len(selected_ids):
+                    break
+    ordered = [rid for rid in selected_ids if rid in found]
+    if ordered:
+        with gzip.open(out_fastq, "wt") as oh:
+            SeqIO.write([found[r] for r in ordered], oh, "fastq")
+    return len(ordered), len(selected_ids) - len(ordered), sum(len(found[r].seq) for r in ordered)
+
+def _recover_pe(selected_ids, r1_path, r2_path, out_r1, out_r2):
+    found = {}
+    if not (Path(r1_path).exists() and Path(r2_path).exists()):
+        return 0, len(selected_ids), 0
+    for a,b in zip(_iter_fastq(Path(r1_path)), _iter_fastq(Path(r2_path))):
+        i1 = normalize_read_id(a.description or a.id); i2 = normalize_read_id(b.description or b.id)
+        if i1 != i2:
+            continue
+        if i1 in selected_ids and i1 not in found:
+            found[i1]=(a,b)
+            if len(found)==len(selected_ids):
+                break
+    ordered=[rid for rid in selected_ids if rid in found]
+    if ordered:
+        with gzip.open(out_r1,'wt') as h1, gzip.open(out_r2,'wt') as h2:
+            SeqIO.write([found[r][0] for r in ordered], h1, 'fastq')
+            SeqIO.write([found[r][1] for r in ordered], h2, 'fastq')
+    return len(ordered), len(selected_ids)-len(ordered), sum(len(found[r][0].seq)+len(found[r][1].seq) for r in ordered)
 def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: Path, refinement_dir: Path, outdir: Path):
     outdir = ensure_dir(outdir)
     targets_tsv = outdir / "candidate_assembly_targets.tsv"
@@ -244,7 +363,35 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 if merged:
                     selected_ids_tsv = str(rd / f"{tid}.{rs}.selected_read_ids.tsv")
                     pd.DataFrame(sorted(merged.values(), key=lambda x: x["selected_order"] if "selected_order" in x else 0)).to_csv(selected_ids_tsv, sep="\t", index=False)
-                # sequence recovery continues below using existing pool fastqs as source
+                sel_ids = [x["read_id"] for x in sorted(merged.values(), key=lambda x: x.get("selected_order", 0))]
+                if sel_ids:
+                    reads_cfg = safe_get(config, ["reads"], {}) or {}
+                    if rtype in LONG_TYPES or rtype in {"illumina_se", "se"}:
+                        srcs = _as_list(reads_cfg.get(rs)) + _as_list(reads_cfg.get("hifi" if "hifi" in rs.lower() else "pacbio_hifi")) + _as_list(reads_cfg.get("ont")) + _as_list(reads_cfg.get("pacbio")) + _as_list(reads_cfg.get("illumina_se"))
+                        in_fastq = str(rd / f"{tid}.{rs}.mito300_target85.fastq.gz")
+                        recov, miss, total_bases = _recover_single_from_sources(sel_ids, srcs, Path(in_fastq))
+                        final_used = recov
+                        print(f"[candidate_assembly] read_set={rs} selected={len(sel_ids)} recovered={recov} missing={miss} fastq={in_fastq}")
+                    else:
+                        r1 = safe_get(reads_cfg,[rs,'r1'],None) or safe_get(reads_cfg,['illumina','r1'],None) or reads_cfg.get('illumina_r1')
+                        r2 = safe_get(reads_cfg,[rs,'r2'],None) or safe_get(reads_cfg,['illumina','r2'],None) or reads_cfg.get('illumina_r2')
+                        if r1 and r2:
+                            in_r1 = str(rd / f"{tid}.{rs}.mito300_target85_R1.fastq.gz")
+                            in_r2 = str(rd / f"{tid}.{rs}.mito300_target85_R2.fastq.gz")
+                            recov, miss, total_bases = _recover_pe(sel_ids, r1, r2, Path(in_r1), Path(in_r2))
+                            final_used = recov
+                            print(f"[candidate_assembly] read_set={rs} selected_pairs={len(sel_ids)} recovered_pairs={recov} missing_pairs={miss} R1={in_r1} R2={in_r2}")
+                    if final_used > 0:
+                        lens = [int(x.get("read_length",0)) for x in merged.values() if int(x.get("read_length",0))>0]
+                        if lens:
+                            a=sorted(lens, reverse=True); c=0; half=sum(a)/2
+                            for L in a:
+                                c += L
+                                if c >= half:
+                                    n50 = L; break
+                    elif len(sel_ids) > 0:
+                        status = "SELECTED_READS_NOT_FOUND_IN_FASTQ"
+
             elif strategy == "targeted_plus_mitogenome":
                 if rtype in LONG_TYPES or rtype in {"illumina_se", "se"}:
                     tref = target_only.iloc[0] if not target_only.empty else None
@@ -406,7 +553,7 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 "target_reads_requested": target_req, "target_reads_available": t_avail, "target_reads_used": t_used,
                 "mitogenome_reads_requested": mito_req, "mitogenome_reads_available": m_avail, "mitogenome_reads_used": m_used,
                 "duplicated_reads_removed": dedup_rm, "final_reads_used_for_assembly": final_used,
-                "selected_read_ids_tsv": selected_ids_tsv, "total_selected_bases": total_bases, "selected_read_n50": n50, "assembly_input_fastq": in_fastq, "assembly_input_r1": in_r1, "assembly_input_r2": in_r2,
+                "reads_recovered_from_fastq": final_used if in_fastq != "." else 0, "read_pairs_recovered_from_fastq": final_used if in_r1 != "." else 0, "reads_missing_in_fastq": max(0,(t_used+m_used)-final_used), "selected_read_ids_tsv": selected_ids_tsv, "total_selected_bases": total_bases, "selected_read_n50": n50, "assembly_input_fastq": in_fastq, "assembly_input_r1": in_r1, "assembly_input_r2": in_r2,
                 "assembler": assembler or ".", "assembly_fasta": str(asm_fa) if asm_fa else ".",
                 "best_contig_id": best_contig, "best_contig_len": best_len,
                 "blastn_best_hit_refined_seqid": rec.id if bident != "." else ".", "blastn_best_pident": bident,
