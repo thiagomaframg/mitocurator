@@ -66,7 +66,13 @@ def cmd_targeted_extraction(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
     te_dir = ensure_dir(root / "08_targeted_extraction")
-    run_targeted_extraction(config, root, root / "05_refinement", root / "06_read_support", te_dir)
+    run_targeted_extraction(
+        config,
+        root,
+        root / "05_refinement",
+        root / "06_read_support",
+        te_dir,
+    )
     print(f"Targeted extraction written to: {te_dir}")
 
 
@@ -74,7 +80,13 @@ def cmd_reconstruction_pools(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
     pools_dir = ensure_dir(root / "09_reconstruction_pools")
-    run_reconstruction_pools(config, root, root / "06_read_support", root / "08_targeted_extraction", pools_dir)
+    run_reconstruction_pools(
+        config,
+        root,
+        root / "06_read_support",
+        root / "08_targeted_extraction",
+        pools_dir,
+    )
     print(f"Reconstruction pools written to: {pools_dir}")
 
 
@@ -82,7 +94,13 @@ def cmd_targeted_consensus(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
     cons_dir = ensure_dir(root / "10_targeted_consensus")
-    run_targeted_consensus(config, root, root / "05_refinement", root / "09_reconstruction_pools", cons_dir)
+    run_targeted_consensus(
+        config,
+        root,
+        root / "05_refinement",
+        root / "09_reconstruction_pools",
+        cons_dir,
+    )
     print(f"Targeted consensus written to: {cons_dir}")
 
 
@@ -156,7 +174,13 @@ def cmd_run(args):
     targeted_enabled = bool(safe_get(config, ["targeted_extraction", "enabled"], False))
     if targeted_enabled:
         te_dir = ensure_dir(root / "08_targeted_extraction")
-        run_targeted_extraction(config, root, root / "05_refinement", root / "06_read_support", te_dir)
+        run_targeted_extraction(
+            config,
+            root,
+            root / "05_refinement",
+            root / "06_read_support",
+            te_dir,
+        )
         print(f"[6/10] Targeted extraction: {te_dir}")
     else:
         print("[6/10] Targeted extraction: disabled")
@@ -164,7 +188,13 @@ def cmd_run(args):
     pools_enabled = bool(safe_get(config, ["reconstruction_pools", "enabled"], False))
     if pools_enabled:
         pools_dir = ensure_dir(root / "09_reconstruction_pools")
-        run_reconstruction_pools(config, root, root / "06_read_support", root / "08_targeted_extraction", pools_dir)
+        run_reconstruction_pools(
+            config,
+            root,
+            root / "06_read_support",
+            root / "08_targeted_extraction",
+            pools_dir,
+        )
         print(f"[7/10] Reconstruction pools: {pools_dir}")
     else:
         print("[7/10] Reconstruction pools: disabled")
@@ -172,7 +202,13 @@ def cmd_run(args):
     consensus_enabled = bool(safe_get(config, ["targeted_consensus", "enabled"], False))
     if consensus_enabled:
         cons_dir = ensure_dir(root / "10_targeted_consensus")
-        run_targeted_consensus(config, root, root / "05_refinement", root / "09_reconstruction_pools", cons_dir)
+        run_targeted_consensus(
+            config,
+            root,
+            root / "05_refinement",
+            root / "09_reconstruction_pools",
+            cons_dir,
+        )
         print(f"[8/10] Targeted consensus: {cons_dir}")
     else:
         print("[8/10] Targeted consensus: disabled")

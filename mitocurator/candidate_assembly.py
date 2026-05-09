@@ -5,6 +5,8 @@ import random
 import shutil
 import pandas as pd
 from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.Align import PairwiseAligner
 
 from .utils import ensure_dir, safe_get, run_cmd, get_genetic_code
 from .io import read_record
@@ -68,6 +70,39 @@ def _collect_paired_records(r1_path: Path, r2_path: Path):
     return pairs
 
 
+
+
+def _scan_orfs(seq: str, code: int, min_orf_nt: int = 150):
+    cands = []
+    strands = [("+", seq), ("-", str(Seq(seq).reverse_complement()))]
+    stop_codons = {"TAA", "TAG", "AGA", "AGG"} if code == 5 else {"TAA", "TAG", "TGA"}
+    oid = 1
+    for strand, s in strands:
+        for frame in (0, 1, 2):
+            i = frame
+            while i + 3 <= len(s):
+                j = i
+                while j + 3 <= len(s) and s[j:j+3] not in stop_codons:
+                    j += 3
+                nt = s[i:j]
+                if len(nt) >= min_orf_nt:
+                    aa = str(Seq(nt).translate(table=code, to_stop=False))
+                    cands.append({"orf_id": f"orf{oid}", "aa": aa, "internal_stop_count": aa[:-1].count("*")})
+                    oid += 1
+                i = j + 3
+    return cands
+
+def _align_metrics(query_aa: str, ref_aa: str):
+    if not query_aa or not ref_aa:
+        return ".", ".", "."
+    al = PairwiseAligner(mode="global")
+    aln = al.align(query_aa, ref_aa)[0]
+    q, r = aln[0], aln[1]
+    matches = sum(1 for a, b in zip(q, r) if a == b and a != "-" and b != "-")
+    aligned = sum(1 for a, b in zip(q, r) if a != "-" and b != "-")
+    pid = round(100.0 * matches / max(aligned, 1), 2)
+    covr = round(100.0 * aligned / max(len(ref_aa), 1), 2)
+    return pid, covr, float(aln.score)
 def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: Path, refinement_dir: Path, outdir: Path):
     outdir = ensure_dir(outdir)
     targets_tsv = outdir / "candidate_assembly_targets.tsv"
@@ -106,6 +141,15 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
     threads = int(ca.get("threads", 16))
     min_len = int(ca.get("min_contig_len", 300))
     code = get_genetic_code(config, default=5)
+    ps = safe_get(config, ["candidate_assembly", "protein_search"], {}) or {}
+    p_word = int(ps.get("word_size", 2))
+    p_matrix = str(ps.get("matrix", "PAM30"))
+    p_comp = int(ps.get("comp_based_stats", 0))
+    p_seg = "no" if bool(ps.get("disable_seg", True)) else "yes"
+    p_soft = "false" if not bool(ps.get("soft_masking", False)) else "true"
+    run_blastx_fallback = bool(ps.get("run_blastx_fallback", True))
+    run_orfscan_fallback = bool(ps.get("run_orfscan_fallback", True))
+    min_orf_nt = int(ps.get("min_orf_nt", 150))
 
     rows = []
     target_rows = []
@@ -225,6 +269,8 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
             bident = bqcov = bsstart = bsend = "."
             tbpid = tbqcov = tbscov = tbbs = "."
             recm = "NO_LOCAL_ASSEMBLY_SUPPORT"
+            protein_method = "."; tblastn_status = blastx_status = orfscan_status = "NOT_RUN"
+            protein_best_pid = protein_best_cov = protein_best_score = "."
             if asm_fa and Path(asm_fa).exists():
                 sel = ad / "selected_candidate_contigs.fasta"
                 kept = [s for s in SeqIO.parse(str(asm_fa), "fasta") if len(s.seq) >= min_len]
@@ -244,17 +290,47 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                             f.write(f">{gene}\n{refaa}\n")
                         run_cmd(["makeblastdb", "-in", str(sel), "-dbtype", "nucl"], check=False)
                         t6 = bd / "tblastn_reference_protein_vs_candidate_assembly.tsv"
-                        run_cmd(["tblastn", "-query", str(qfaa), "-db", str(sel), "-outfmt", "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen", "-evalue", str(ca.get("tblastn_evalue", "1e-5")), "-num_threads", str(threads), "-out", str(t6)], check=False)
+                        run_cmd(["tblastn", "-query", str(qfaa), "-db", str(sel), "-db_gencode", str(code), "-seg", p_seg, "-soft_masking", p_soft, "-word_size", str(p_word), "-matrix", p_matrix, "-comp_based_stats", str(p_comp), "-outfmt", "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen", "-evalue", str(ca.get("tblastn_evalue", "1e-5")), "-num_threads", str(threads), "-out", str(t6)], check=False)
                         if t6.exists() and t6.stat().st_size > 0:
                             y = pd.read_csv(t6, sep="\t", header=None).iloc[0]
                             tbpid = float(y[2]); qlen = float(y[12]); slen = float(y[13]); al = float(y[3]); tbqcov = round(100 * al / max(qlen, 1), 2); tbscov = round(100 * al / max(slen, 1), 2); tbbs = float(y[11])
-                    if tbpid != "." and tbqcov != "." and tbpid >= float(ca.get("tblastn_min_identity", 25)) and tbqcov >= float(ca.get("tblastn_min_coverage", 25)):
-                        recm = "LOCAL_ASSEMBLY_SUPPORTS_MISSING_GENE"
+                            protein_method = "tblastn"; tblastn_status = "HIT"; protein_best_pid = tbpid; protein_best_cov = tbqcov; protein_best_score = tbbs
+                        else:
+                            tblastn_status = "NO_HIT"
+                            if run_blastx_fallback:
+                                pdb = bd / f"reference_{gene}_prot_db.faa"
+                                with open(pdb, "w", encoding="utf-8") as f:
+                                    f.write(f">{gene}\n{refaa}\n")
+                                run_cmd(["makeblastdb", "-in", str(pdb), "-dbtype", "prot"], check=False)
+                                x6 = bd / "blastx_reference_protein_vs_candidate_assembly.tsv"
+                                run_cmd(["blastx", "-query", str(sel), "-db", str(pdb), "-query_gencode", str(code), "-seg", p_seg, "-soft_masking", p_soft, "-word_size", str(p_word), "-matrix", p_matrix, "-comp_based_stats", str(p_comp), "-evalue", str(ca.get("tblastn_evalue", "1e-5")), "-outfmt", "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen", "-num_threads", str(threads), "-out", str(x6)], check=False)
+                                if x6.exists() and x6.stat().st_size > 0:
+                                    y = pd.read_csv(x6, sep="\t", header=None).iloc[0]
+                                    protein_method = "blastx"; blastx_status = "HIT"; protein_best_pid = float(y[2]); protein_best_cov = round(100*float(y[3])/max(float(y[12]),1),2); protein_best_score = float(y[11])
+                                else:
+                                    blastx_status = "NO_HIT"
+                            if protein_method == "." and run_orfscan_fallback:
+                                best_orf = None
+                                for contig in kept:
+                                    for orf in _scan_orfs(str(contig.seq).upper(), code, min_orf_nt=min_orf_nt):
+                                        pid, covr, score = _align_metrics(orf["aa"], refaa)
+                                        if pid == ".":
+                                            continue
+                                        cand = (float(score), float(pid), float(covr), -int(orf["internal_stop_count"]))
+                                        if best_orf is None or cand > best_orf[0]:
+                                            best_orf = (cand, pid, covr, score, orf["internal_stop_count"])
+                                if best_orf:
+                                    protein_method = "orfscan_pairwise"; orfscan_status = "HIT"
+                                    protein_best_pid, protein_best_cov, protein_best_score = best_orf[1], best_orf[2], best_orf[3]
+                                    pd.DataFrame([{"method":"orfscan_pairwise","pident":protein_best_pid,"coverage_reference":protein_best_cov,"score":protein_best_score,"internal_stop_count":best_orf[4]}]).to_csv(bd / "orfscan_reference_protein_vs_candidate_assembly.tsv", sep="\t", index=False)
+                                else:
+                                    orfscan_status = "NO_HIT"
+                    if protein_method != "." and protein_best_pid != "." and float(protein_best_pid) >= float(ca.get("tblastn_min_identity", 25)) and float(protein_best_cov) >= float(ca.get("tblastn_min_coverage", 25)):
+                        recm = "LOCAL_ASSEMBLY_SUPPORTS_MISSING_GENE" if protein_method != "orfscan_pairwise" else "LOCAL_ASSEMBLY_SUPPORTS_MISSING_GENE_BY_ORF_ALIGNMENT"
                         if bqcov != "." and bqcov < float(ca.get("blastn_min_coverage", 30)):
                             recm = "LOCAL_ASSEMBLY_SUGGESTS_MITOGENOME_ERROR"
-                    elif tbpid != ".":
-                        recm = "LOCAL_ASSEMBLY_NEEDS_REVIEW"
-
+                    elif bident != ".":
+                        recm = "LOCAL_ASSEMBLY_MITOCHONDRIAL_BUT_NO_PROTEIN_HIT"
             row = {
                 "gene": gene, "target_id": tid, "read_set": rs,
                 "assembly_pool_strategy": strategy,
@@ -268,7 +344,9 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 "blastn_best_qcov": bqcov, "blastn_best_sstart": bsstart, "blastn_best_send": bsend,
                 "tblastn_best_pident": tbpid, "tblastn_best_query_coverage": tbqcov, "tblastn_best_subject_coverage": tbscov,
                 "tblastn_best_bitscore": tbbs, "reference_protein_length": len(_reference_protein(config, gene, code) or ""),
-                "candidate_region_status": status, "recommendation": recm, "comment": "diagnostic-only",
+                "candidate_region_status": status, "recommendation": recm, "protein_search_method": protein_method, "tblastn_status": tblastn_status, "blastx_status": blastx_status, "orfscan_status": orfscan_status,
+                "protein_search_best_pident": protein_best_pid, "protein_search_best_reference_coverage": protein_best_cov, "protein_search_best_bitscore_or_score": protein_best_score,
+                "comment": "diagnostic-only",
             }
             rows.append(row)
             target_rows.append({k: row[k] for k in [
@@ -294,6 +372,8 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 md.write(f"- duplicatas removidas: {r.duplicated_reads_removed}\n")
                 md.write(f"- reads finais para montagem: {r.final_reads_used_for_assembly}\n")
                 md.write(f"- status: {r.candidate_region_status}\n")
+                md.write(f"- protein search: method={r.protein_search_method} tblastn={r.tblastn_status} blastx={r.blastx_status} orfscan={r.orfscan_status}\n")
+                md.write(f"- protein best: pid={r.protein_search_best_pident} cov_ref={r.protein_search_best_reference_coverage} score={r.protein_search_best_bitscore_or_score}\n")
                 md.write(f"- recomendação: {r.recommendation}\n\n")
         md.write("Nenhum GenBank foi alterado nesta etapa.\n")
     return outdir
