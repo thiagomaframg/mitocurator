@@ -136,7 +136,7 @@ mitofinder:
 candidate_assembly:
   enabled: true
   candidate_source: cross_readset
-  assembly_pool_strategy: targeted_plus_mitogenome
+  assembly_pool_strategy: mapped_mitogenome_plus_target
   max_mitogenome_reads_per_candidate: 300
   max_target_reads_per_candidate: 85
   random_seed: 42

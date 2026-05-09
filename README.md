@@ -282,3 +282,6 @@ A montagem local de candidatos usa por padrão um pool controlado (`assembly_poo
 Total alvo: até **385 reads** por candidato/read_set, com deduplicação por `read_id` e seed reproduzível (`random_seed`).
 
 Isso reduz ruído e tempo de montagem em regiões candidatas pequenas, mantendo evidência de contexto global + sinal local.
+
+
+`candidate_assembly` usa por padrão `assembly_pool_strategy: mapped_mitogenome_plus_target`, selecionando até 300 reads mapeadas no mitogenoma + até 85 reads mapeadas no alvo via BAM (com deduplicação por read_id).

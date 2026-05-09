@@ -4,6 +4,7 @@ import gzip
 import random
 import shutil
 import pandas as pd
+import pysam
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.Align import PairwiseAligner
@@ -103,13 +104,58 @@ def _align_metrics(query_aa: str, ref_aa: str):
     pid = round(100.0 * matches / max(aligned, 1), 2)
     covr = round(100.0 * aligned / max(len(ref_aa), 1), 2)
     return pid, covr, float(aln.score)
+
+
+def _load_target_regions(targeted_dir: Path):
+    regions = {}
+    bed = targeted_dir / "targets.bed"
+    if bed.exists():
+        for ln in bed.read_text(encoding="utf-8").splitlines():
+            if not ln.strip() or ln.startswith("#"):
+                continue
+            c, a, b, tid, *_ = (ln.split("	") + [".", ".", ".", "."])
+            regions[str(tid)] = (c, int(a), int(b))
+    tsv = targeted_dir / "targeted_read_extraction.tsv"
+    if tsv.exists():
+        df = pd.read_csv(tsv, sep="	").fillna(".")
+        for r in df.itertuples():
+            if str(r.target_id) not in regions and hasattr(r, "contig") and hasattr(r, "start") and hasattr(r, "end"):
+                regions[str(r.target_id)] = (str(r.contig), int(r.start), int(r.end))
+    return regions
+
+
+def _select_read_ids_from_bam(bam_path: Path, region, max_reads: int, min_mapping_quality: int, seed_text: str, source_type: str):
+    rows = []
+    if not bam_path.exists():
+        return rows
+    with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        it = bam.fetch(region[0], max(0, int(region[1])), int(region[2])) if region else bam.fetch(until_eof=True)
+        for r in it:
+            if r.is_unmapped or r.is_secondary or r.is_supplementary:
+                continue
+            if int(r.mapping_quality) < int(min_mapping_quality):
+                continue
+            rid = _read_base_id(r.query_name)
+            rows.append({"read_id": rid, "source_type": source_type, "mapping_contig": bam.get_reference_name(r.reference_id) if r.reference_id >= 0 else ".", "mapping_start": int(r.reference_start)+1, "mapping_end": int(r.reference_end or r.reference_start), "mapping_quality": int(r.mapping_quality), "read_length": int(r.query_length or 0)})
+    rows = sorted(rows, key=lambda x: x["read_id"])
+    uniq = {}
+    for r in rows:
+        uniq[r["read_id"]] = r
+    rows = [uniq[k] for k in sorted(uniq.keys())]
+    rng = random.Random(seed_text)
+    if max_reads >= 0 and len(rows) > max_reads:
+        idx = sorted(rng.sample(range(len(rows)), max_reads))
+        rows = [rows[i] for i in idx]
+    for i, r in enumerate(rows, 1):
+        r["selected_order"] = i
+    return rows
 def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: Path, refinement_dir: Path, outdir: Path):
     outdir = ensure_dir(outdir)
     targets_tsv = outdir / "candidate_assembly_targets.tsv"
     sum_tsv = outdir / "candidate_assembly_summary.tsv"
     sum_md = outdir / "candidate_assembly_summary.md"
     ca = safe_get(config, ["candidate_assembly"], {}) or {}
-    strategy = str(ca.get("assembly_pool_strategy", "targeted_plus_mitogenome"))
+    strategy = str(ca.get("assembly_pool_strategy", "mapped_mitogenome_plus_target"))
     target_req = int(ca.get("max_target_reads_per_candidate", 85))
     mito_req = int(ca.get("max_mitogenome_reads_per_candidate", 300))
     rng = random.Random(int(ca.get("random_seed", 42)))
@@ -153,6 +199,7 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
 
     rows = []
     target_rows = []
+    target_regions = _load_target_regions(root / "08_targeted_extraction")
     for rr in cand.itertuples():
         gene = str(rr.gene)
         tid = str(rr.target_id)
@@ -176,7 +223,29 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
             in_fastq = in_r1 = in_r2 = "."
 
             t_avail = m_avail = t_used = m_used = dedup_rm = final_used = 0
-            if strategy == "targeted_plus_mitogenome":
+            selected_ids_tsv = "."
+            total_bases = 0
+            n50 = 0
+            if strategy == "mapped_mitogenome_plus_target":
+                bam = root / "06_read_support" / f"{rs}_to_refined.bam"
+                region = target_regions.get(tid)
+                seed_base = f"{ca.get('random_seed',42)}|{gene}|{tid}|{rs}"
+                mrows = _select_read_ids_from_bam(bam, None, mito_req, int(ca.get('min_mapping_quality',20)), seed_base+"|mitogenome_mapped", "mitogenome_mapped")
+                trows = _select_read_ids_from_bam(bam, region, target_req, int(ca.get('min_mapping_quality',20)), seed_base+"|target_mapped", "target_mapped")
+                t_avail, m_avail = len(trows), len(mrows)
+                merged = {}
+                for rrw in trows + mrows:
+                    if rrw["read_id"] not in merged:
+                        merged[rrw["read_id"]] = rrw
+                dedup_rm = len(trows) + len(mrows) - len(merged)
+                t_used = len([x for x in merged.values() if x["source_type"] == "target_mapped"])
+                m_used = len([x for x in merged.values() if x["source_type"] == "mitogenome_mapped"])
+                final_used = len(merged)
+                if merged:
+                    selected_ids_tsv = str(rd / f"{tid}.{rs}.selected_read_ids.tsv")
+                    pd.DataFrame(sorted(merged.values(), key=lambda x: x["selected_order"] if "selected_order" in x else 0)).to_csv(selected_ids_tsv, sep="\t", index=False)
+                # sequence recovery continues below using existing pool fastqs as source
+            elif strategy == "targeted_plus_mitogenome":
                 if rtype in LONG_TYPES or rtype in {"illumina_se", "se"}:
                     tref = target_only.iloc[0] if not target_only.empty else None
                     mref = mito_only.iloc[0] if not mito_only.empty else None
@@ -337,7 +406,7 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 "target_reads_requested": target_req, "target_reads_available": t_avail, "target_reads_used": t_used,
                 "mitogenome_reads_requested": mito_req, "mitogenome_reads_available": m_avail, "mitogenome_reads_used": m_used,
                 "duplicated_reads_removed": dedup_rm, "final_reads_used_for_assembly": final_used,
-                "assembly_input_fastq": in_fastq, "assembly_input_r1": in_r1, "assembly_input_r2": in_r2,
+                "selected_read_ids_tsv": selected_ids_tsv, "total_selected_bases": total_bases, "selected_read_n50": n50, "assembly_input_fastq": in_fastq, "assembly_input_r1": in_r1, "assembly_input_r2": in_r2,
                 "assembler": assembler or ".", "assembly_fasta": str(asm_fa) if asm_fa else ".",
                 "best_contig_id": best_contig, "best_contig_len": best_len,
                 "blastn_best_hit_refined_seqid": rec.id if bident != "." else ".", "blastn_best_pident": bident,
@@ -371,7 +440,12 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
                 md.write(f"- mitogenome usadas: {r.mitogenome_reads_used}/{r.mitogenome_reads_available} (req={r.mitogenome_reads_requested})\n")
                 md.write(f"- duplicatas removidas: {r.duplicated_reads_removed}\n")
                 md.write(f"- reads finais para montagem: {r.final_reads_used_for_assembly}\n")
-                md.write(f"- status: {r.candidate_region_status}\n")
+                md.write(f"- selected IDs TSV: {r.selected_read_ids_tsv}\n")
+                md.write(f"- status montagem: {r.candidate_region_status}\n")
+                md.write(f"- status BLASTN: {r.blastn_best_pident}\n")
+                md.write(f"- status TBLASTN: {r.tblastn_status}\n")
+                md.write(f"- status BLASTX: {r.blastx_status}\n")
+                md.write(f"- status ORF scan: {r.orfscan_status}\n")
                 md.write(f"- protein search: method={r.protein_search_method} tblastn={r.tblastn_status} blastx={r.blastx_status} orfscan={r.orfscan_status}\n")
                 md.write(f"- protein best: pid={r.protein_search_best_pident} cov_ref={r.protein_search_best_reference_coverage} score={r.protein_search_best_bitscore_or_score}\n")
                 md.write(f"- recomendação: {r.recommendation}\n\n")
