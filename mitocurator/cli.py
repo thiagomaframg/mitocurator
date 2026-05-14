@@ -9,6 +9,7 @@ from .refinement import refine_annotation
 from .io import infer_format
 from .mitofinder_runner import run_mitofinder_for_fasta
 from .read_support import run_read_support
+from .read_mapping import run_read_mapping
 from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
@@ -67,6 +68,18 @@ def cmd_read_support(args):
     rs_dir = ensure_dir(root / "06_read_support")
     run_read_support(config, refined_gb, root / "05_refinement", rs_dir)
     print(f"Read support written to: {rs_dir}")
+
+
+def cmd_read_mapping(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_read_mapping(config, root, ensure_dir(root / "08_read_mapping"))
+    print(f"Read mapping written to: {outdir}")
+    print(f"  {outdir / 'mitogenome_reference.fasta'}")
+    print(f"  {outdir / 'readsets.tsv'}")
+    print(f"  {outdir / 'mapping_summary.tsv'}")
+    print(f"  {outdir / 'coverage_by_position.tsv'}")
+    print(f"  {outdir / 'coverage_by_gene.tsv'}")
 
 
 def cmd_targeted_extraction(args):
@@ -329,6 +342,10 @@ def build_parser():
     p_rs = sub.add_parser("read-support", help="Run only the read-support stage")
     p_rs.add_argument("--config", required=True)
     p_rs.set_defaults(func=cmd_read_support)
+
+    p_rm = sub.add_parser("read-mapping", help="Map reads to the current mitogenome and summarize coverage")
+    p_rm.add_argument("--config", required=True)
+    p_rm.set_defaults(func=cmd_read_mapping)
 
     p_te = sub.add_parser("targeted-extraction", help="Run only the targeted-extraction stage")
     p_te.add_argument("--config", required=True)
