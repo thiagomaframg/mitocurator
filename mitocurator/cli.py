@@ -46,7 +46,7 @@ def cmd_diagnose(args):
     report_md, summary_tsv = generate_annotation_assessment_report(root)
     print(f"Diagnostic files written to: {outdir}")
     print(f"Annotation assessment report written to: {report_md}")
-    print(f"Annotation assessment summary written to: {summary_tsv}")
+    print(f"Annotation evidence summary written to: {summary_tsv}")
 
 
 def cmd_rotate(args):
@@ -129,7 +129,7 @@ def cmd_annotation_assessment(args):
     root = outdir_from_config(config)
     report_md, summary_tsv = generate_annotation_assessment_report(root)
     print(f"Annotation assessment report written to: {report_md}")
-    print(f"Annotation assessment summary written to: {summary_tsv}")
+    print(f"Annotation evidence summary written to: {summary_tsv}")
 
 
 def cmd_run(args):
@@ -182,7 +182,7 @@ def cmd_run(args):
 
     assessment_md, assessment_tsv = generate_annotation_assessment_report(root)
     print(f"[6/11] Annotation assessment report: {assessment_md}")
-    print(f"       Annotation assessment summary: {assessment_tsv}")
+    print(f"       Annotation evidence summary: {assessment_tsv}")
 
     read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
     if read_support_enabled:
@@ -298,8 +298,8 @@ def cmd_run(args):
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_report.md'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_curation_summary.tsv'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_assessment_report.md'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_evidence_summary.tsv'}")
 
 
 def build_parser():

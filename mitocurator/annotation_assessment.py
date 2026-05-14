@@ -419,9 +419,9 @@ def generate_annotation_assessment_report(root: Path):
     targeted consensus, reconstruction pools or candidate assembly.
     """
     report_dir = ensure_dir(root / "06_annotation_assessment")
-    md_path = report_dir / "annotation_report.md"
-    annotation_summary_tsv = report_dir / "annotation_curation_summary.tsv"
-    gene_summary_tsv = report_dir / "annotation_gene_summary.tsv"
+    md_path = report_dir / "annotation_assessment_report.md"
+    annotation_summary_tsv = report_dir / "annotation_evidence_summary.tsv"
+    gene_summary_tsv = report_dir / "annotation_review_targets.tsv"
 
     evidence = _collect_evidence_status(root)
     raw_rows = _collect_annotation_rows(root)
