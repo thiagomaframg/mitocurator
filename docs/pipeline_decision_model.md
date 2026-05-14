@@ -68,3 +68,117 @@ Artefatos de relatório já gerados:
 
 Recomendação de governança curatorial:
 - Cada decisão manual deve referenciar: arquivo TSV de origem, coordenadas, motivo da decisão e resultado pós-validação.
+
+---
+
+## Current evidence-driven execution model
+
+The MitoCurator workflow is organized as an evidence-driven curation pipeline. The intended order is:
+
+1. **Input mitochondrial sequence**
+   - FASTA sequence recovered by tools such as MitoHiFi, PipeASM or another assembly/recovery workflow; or
+   - an already annotated GenBank file.
+
+2. **Initial annotation**
+   - If the input is FASTA, MitoFinder is used to generate an initial GenBank annotation.
+   - If the input is GenBank, the existing annotation is used as the starting point.
+
+3. **Initial refinement**
+   - Standardize gene names and feature labels.
+   - Compare the annotation against an expected mitochondrial gene set.
+   - Add or normalize non-coding regions such as AT-rich/control-region features when supported.
+   - Generate refinement candidates for missing genes or problematic CDS features.
+
+4. **Diagnosis and annotation assessment**
+   - Measure annotation completeness and feature-level quality.
+   - Detect missing genes, problematic CDS features, internal stops, possible boundary issues, and missing tRNAs/rRNAs.
+   - Generate a curator-facing annotation assessment report.
+   - Outputs include:
+     - `annotation_gene_inventory.tsv`
+     - `annotation_review_targets.tsv`
+     - `annotation_evidence_summary.tsv`
+     - `annotation_assessment_report.md`
+     - `annotation_assessment_report.html`
+
+5. **Read mapping to the mitogenome**
+   - Map available sequencing reads against the current mitochondrial reference.
+   - Generate sorted/indexed BAM files, coverage summaries and mapping statistics.
+   - This step must precede read-support interpretation.
+
+6. **Variant and coverage evidence**
+   - Identify SNPs and indels relative to the current mitogenome.
+   - Summarize depth, allele balance, support for insertions/deletions, and gene-level variant evidence.
+
+7. **Read-support interpretation**
+   - Interpret read mapping and variant evidence in the context of annotation problems.
+   - Evaluate whether internal stops, frameshifts or suspicious CDS features are supported by reads or suggest sequence/annotation errors.
+
+8. **Targeted consensus and local reconstruction**
+   - Used for missing, partial or ambiguous genes.
+   - Particularly relevant for genes such as a missing or poorly represented CDS.
+
+9. **Candidate assembly**
+   - Local assembly of candidate regions when read-level evidence and targeted consensus remain insufficient.
+
+10. **Curated outputs and integrated report**
+   - Produce final curated GenBank/FASTA outputs.
+   - Generate final integrated curation reports documenting all evidence and actions.
+
+This model prevents downstream read-support or candidate-assembly interpretation from being executed before the required read mapping and variant evidence layers exist.
+
+---
+
+## Current evidence-driven execution model
+
+The MitoCurator workflow is organized as an evidence-driven curation pipeline. The intended order is:
+
+1. **Input mitochondrial sequence**
+   - FASTA sequence recovered by tools such as MitoHiFi, PipeASM or another assembly/recovery workflow; or
+   - an already annotated GenBank file.
+
+2. **Initial annotation**
+   - If the input is FASTA, MitoFinder is used to generate an initial GenBank annotation.
+   - If the input is GenBank, the existing annotation is used as the starting point.
+
+3. **Initial refinement**
+   - Standardize gene names and feature labels.
+   - Compare the annotation against an expected mitochondrial gene set.
+   - Add or normalize non-coding regions such as AT-rich/control-region features when supported.
+   - Generate refinement candidates for missing genes or problematic CDS features.
+
+4. **Diagnosis and annotation assessment**
+   - Measure annotation completeness and feature-level quality.
+   - Detect missing genes, problematic CDS features, internal stops, possible boundary issues, and missing tRNAs/rRNAs.
+   - Generate a curator-facing annotation assessment report.
+   - Outputs include:
+     - `annotation_gene_inventory.tsv`
+     - `annotation_review_targets.tsv`
+     - `annotation_evidence_summary.tsv`
+     - `annotation_assessment_report.md`
+     - `annotation_assessment_report.html`
+
+5. **Read mapping to the mitogenome**
+   - Map available sequencing reads against the current mitochondrial reference.
+   - Generate sorted/indexed BAM files, coverage summaries and mapping statistics.
+   - This step must precede read-support interpretation.
+
+6. **Variant and coverage evidence**
+   - Identify SNPs and indels relative to the current mitogenome.
+   - Summarize depth, allele balance, support for insertions/deletions, and gene-level variant evidence.
+
+7. **Read-support interpretation**
+   - Interpret read mapping and variant evidence in the context of annotation problems.
+   - Evaluate whether internal stops, frameshifts or suspicious CDS features are supported by reads or suggest sequence/annotation errors.
+
+8. **Targeted consensus and local reconstruction**
+   - Used for missing, partial or ambiguous genes.
+   - Particularly relevant for genes such as a missing or poorly represented CDS.
+
+9. **Candidate assembly**
+   - Local assembly of candidate regions when read-level evidence and targeted consensus remain insufficient.
+
+10. **Curated outputs and integrated report**
+   - Produce final curated GenBank/FASTA outputs.
+   - Generate final integrated curation reports documenting all evidence and actions.
+
+This model prevents downstream read-support or candidate-assembly interpretation from being executed before the required read mapping and variant evidence layers exist.
