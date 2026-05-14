@@ -13,6 +13,7 @@ from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
 from .candidate_assembly import run_candidate_assembly
+from .final_report import generate_final_report
 
 
 def outdir_from_config(config: dict) -> Path:
@@ -232,6 +233,10 @@ def cmd_run(args):
     diagnose(config, qc_dir)
     print(f"[10/10] Diagnosis: {qc_dir}")
 
+    final_report_md, final_report_tsv = generate_final_report(root)
+    print(f"Final report: {final_report_md}")
+    print(f"Final summary: {final_report_tsv}")
+
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
     print(f"  {root / '05_refinement' / 'refined.gb'}")
@@ -281,6 +286,8 @@ def cmd_run(args):
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
+    print(f"  {root / '12_final_report' / 'final_curation_report.md'}")
+    print(f"  {root / '12_final_report' / 'final_curation_summary.tsv'}")
 
 
 def build_parser():
