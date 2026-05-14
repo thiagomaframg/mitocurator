@@ -403,6 +403,106 @@ def _build_gene_annotation_summary(rows: List[Dict[str, str]]) -> List[Dict[str,
     return output
 
 
+def _build_gene_inventory(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Build a complete annotation inventory from annotation-level evidence.
+
+    This table is intended to include both apparently OK genes and genes that
+    require review. It is complementary to annotation_review_targets.tsv, which
+    is decision-oriented and excludes explicit no-action rows.
+    """
+    by_gene: Dict[str, List[Dict[str, str]]] = {}
+    for r in rows:
+        by_gene.setdefault(r["gene"], []).append(r)
+
+    inventory = []
+    for gene, gene_rows in sorted(by_gene.items()):
+        priorities = [r["priority"] for r in gene_rows]
+        annotation_priority = max(
+            priorities,
+            key=lambda p: PRIORITY_RANK.get(p, 0),
+        ) if priorities else "UNKNOWN"
+
+        issues = sorted({r["issue_type"] for r in gene_rows})
+        recommendations = sorted({r["recommendation"] for r in gene_rows})
+        evidence_sources = sorted({r["evidence_source"] for r in gene_rows})
+
+        expected_rows = [r for r in gene_rows if r["issue_type"] == "expected_gene_status"]
+        expected_status = "."
+        gene_type = "."
+        if expected_rows:
+            # expected_gene_status rows store type/count in evidence_examples, e.g. type=CDS; count=1
+            ex = expected_rows[0].get("evidence_examples", "")
+            expected_status = expected_rows[0].get("status", ".")
+            for part in ex.split(";"):
+                part = part.strip()
+                if part.startswith("type="):
+                    gene_type = part.replace("type=", "", 1).strip() or "."
+
+        has_no_action_only = all(
+            r["recommendation"] == "NO_ACTION_EXPECTED_GENE_PRESENT"
+            for r in gene_rows
+        )
+
+        has_missing = any(
+            "MISSING" in r["status"].upper()
+            or "MISSING" in r["issue_type"].upper()
+            or "MISSING" in r["recommendation"].upper()
+            for r in gene_rows
+        )
+        has_problem = any(
+            r["status"].upper() == "PROBLEMATIC"
+            or "STOP" in r["recommendation"].upper()
+            or "INTERNAL_STOP" in r["issue_type"].upper()
+            or "problematic" in r["issue_type"].lower()
+            for r in gene_rows
+        )
+        has_candidate = any("candidate" in r["issue_type"].lower() for r in gene_rows)
+
+        if has_no_action_only:
+            annotation_status = "OK"
+            recommended_action = "KEEP"
+            interpretation = "Expected feature is present and no annotation-level issue was detected."
+        elif has_missing:
+            annotation_status = "MISSING_OR_INCOMPLETE"
+            recommended_action = "REVIEW_MISSING_OR_CANDIDATE_FEATURE"
+            interpretation = "Expected feature is missing or represented only by candidate evidence."
+        elif has_problem:
+            annotation_status = "PROBLEMATIC"
+            recommended_action = "REVIEW_ANNOTATION"
+            interpretation = "Annotation-level problem detected; inspect coordinates, frame and reference evidence."
+        elif has_candidate:
+            annotation_status = "CANDIDATE_REVIEW"
+            recommended_action = "REVIEW_CANDIDATE"
+            interpretation = "Candidate evidence exists; review before accepting the annotation."
+        else:
+            annotation_status = "REVIEW"
+            recommended_action = "MANUAL_REVIEW"
+            interpretation = "Annotation evidence exists but could not be classified as OK or problematic."
+
+        inventory.append({
+            "gene": gene,
+            "type": gene_type,
+            "expected_status": expected_status,
+            "annotation_status": annotation_status,
+            "annotation_priority": annotation_priority,
+            "recommended_action": recommended_action,
+            "annotation_issues": ";".join(issues),
+            "annotation_recommendations": ";".join(recommendations),
+            "annotation_evidence_sources": ";".join(evidence_sources),
+            "annotation_interpretation": interpretation,
+        })
+
+    inventory.sort(
+        key=lambda r: (
+            0 if r["annotation_status"] != "OK" else 1,
+            -PRIORITY_RANK.get(r["annotation_priority"], 0),
+            r["type"],
+            r["gene"],
+        )
+    )
+    return inventory
+
+
 def _write_tsv(path: Path, rows: List[Dict[str, str]], fieldnames: List[str]):
     with open(path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
@@ -422,10 +522,12 @@ def generate_annotation_assessment_report(root: Path):
     md_path = report_dir / "annotation_assessment_report.md"
     annotation_summary_tsv = report_dir / "annotation_evidence_summary.tsv"
     gene_summary_tsv = report_dir / "annotation_review_targets.tsv"
+    gene_inventory_tsv = report_dir / "annotation_gene_inventory.tsv"
 
     evidence = _collect_evidence_status(root)
     raw_rows = _collect_annotation_rows(root)
     collapsed_rows = _collapse_annotation_rows(raw_rows)
+    inventory_rows = _build_gene_inventory(collapsed_rows)
     gene_rows = _build_gene_annotation_summary(collapsed_rows)
 
     _write_tsv(
@@ -440,6 +542,23 @@ def generate_annotation_assessment_report(root: Path):
             "evidence_source",
             "n_records",
             "evidence_examples",
+        ],
+    )
+
+    _write_tsv(
+        gene_inventory_tsv,
+        inventory_rows,
+        [
+            "gene",
+            "type",
+            "expected_status",
+            "annotation_status",
+            "annotation_priority",
+            "recommended_action",
+            "annotation_issues",
+            "annotation_recommendations",
+            "annotation_evidence_sources",
+            "annotation_interpretation",
         ],
     )
 
@@ -490,9 +609,11 @@ def generate_annotation_assessment_report(root: Path):
         out.write("\n## 3. Annotation/refinement summary\n\n")
         out.write(f"- Raw annotation evidence rows: `{len(raw_rows)}`\n")
         out.write(f"- Aggregated annotation evidence rows: `{len(collapsed_rows)}`\n")
-        out.write(f"- Genes/features with annotation signals: `{len(gene_rows)}`\n")
-        out.write(f"- Detailed table: `{annotation_summary_tsv.name}`\n")
-        out.write(f"- Gene-level table: `{gene_summary_tsv.name}`\n\n")
+        out.write(f"- Genes/features in complete inventory: `{len(inventory_rows)}`\n")
+        out.write(f"- Genes/features requiring review: `{len(gene_rows)}`\n")
+        out.write(f"- Evidence summary table: `{annotation_summary_tsv.name}`\n")
+        out.write(f"- Complete gene inventory: `{gene_inventory_tsv.name}`\n")
+        out.write(f"- Review targets table: `{gene_summary_tsv.name}`\n\n")
 
         if not collapsed_rows:
             out.write("No annotation/refinement issues were summarized from the available inputs.\n")
@@ -505,9 +626,22 @@ def generate_annotation_assessment_report(root: Path):
                     f"{r['recommendation']} | `{r['evidence_source']}` | {r['n_records']} |\n"
                 )
 
-        out.write("\n## 4. Gene-level annotation interpretation\n\n")
+        out.write("\n## 4. Complete annotation gene inventory\n\n")
+        out.write(f"Complete table: `{gene_inventory_tsv.name}`\n\n")
+        if not inventory_rows:
+            out.write("No gene inventory was generated.\n")
+        else:
+            out.write("| gene | type | status | priority | action |\n")
+            out.write("|---|---|---|---|---|\n")
+            for r in inventory_rows:
+                out.write(
+                    f"| {r['gene']} | {r['type']} | {r['annotation_status']} | "
+                    f"{r['annotation_priority']} | {r['recommended_action']} |\n"
+                )
+
+        out.write("\n## 5. Review targets and recommended next steps\n\n")
         if not gene_rows:
-            out.write("No gene-level annotation interpretation was generated.\n")
+            out.write("No gene-level annotation review targets were generated.\n")
         else:
             out.write("| gene | priority | evidence sources | interpretation |\n")
             out.write("|---|---|---:|---|\n")
@@ -517,7 +651,7 @@ def generate_annotation_assessment_report(root: Path):
                     f"{r['n_annotation_evidence_sources']} | {r['annotation_interpretation']} |\n"
                 )
 
-        out.write("\n## 5. Diagnostic-only statement\n\n")
+        out.write("\n## 6. Diagnostic-only statement\n\n")
         out.write(
             "This report is **diagnostic-only**. It does not alter the GenBank file, "
             "does not accept or reject candidate corrections automatically, and does not replace manual curation.\n"
