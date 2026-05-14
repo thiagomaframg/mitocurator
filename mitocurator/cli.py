@@ -120,6 +120,14 @@ def cmd_candidate_assembly(args):
     print(f"Candidate assembly written to: {ca_dir}")
 
 
+def cmd_final_report(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    final_report_md, final_report_tsv = generate_final_report(root)
+    print(f"Final report written to: {final_report_md}")
+    print(f"Final summary written to: {final_report_tsv}")
+
+
 def cmd_run(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
@@ -325,6 +333,10 @@ def build_parser():
     p_ca = sub.add_parser("candidate-assembly", help="Run only the candidate-assembly stage")
     p_ca.add_argument("--config", required=True)
     p_ca.set_defaults(func=cmd_candidate_assembly)
+
+    p_fr = sub.add_parser("final-report", help="Generate only the final aggregated curation report")
+    p_fr.add_argument("--config", required=True)
+    p_fr.set_defaults(func=cmd_final_report)
 
     p_run = sub.add_parser("run", help="Run initial all-in-one diagnostic workflow")
     p_run.add_argument("--config", required=True)
