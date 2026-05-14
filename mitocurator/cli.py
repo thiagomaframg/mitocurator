@@ -44,8 +44,10 @@ def cmd_diagnose(args):
     outdir = ensure_dir(root / "07_gene_qc")
     diagnose(config, outdir)
     report_md, summary_tsv = generate_annotation_assessment_report(root)
+    report_html = root / "06_annotation_assessment" / "annotation_assessment_report.html"
     print(f"Diagnostic files written to: {outdir}")
     print(f"Annotation assessment report written to: {report_md}")
+    print(f"Annotation assessment HTML written to: {report_html}")
     print(f"Annotation evidence summary written to: {summary_tsv}")
 
 
@@ -128,7 +130,10 @@ def cmd_annotation_assessment(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
     report_md, summary_tsv = generate_annotation_assessment_report(root)
+    report_html = root / "06_annotation_assessment" / "annotation_assessment_report.html"
+    print("Regenerated annotation assessment from existing diagnosis/refinement outputs.")
     print(f"Annotation assessment report written to: {report_md}")
+    print(f"Annotation assessment HTML written to: {report_html}")
     print(f"Annotation evidence summary written to: {summary_tsv}")
 
 
@@ -299,7 +304,10 @@ def cmd_run(args):
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
     print(f"  {root / '06_annotation_assessment' / 'annotation_assessment_report.md'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_assessment_report.html'}")
     print(f"  {root / '06_annotation_assessment' / 'annotation_evidence_summary.tsv'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_gene_inventory.tsv'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_review_targets.tsv'}")
 
 
 def build_parser():
@@ -338,7 +346,7 @@ def build_parser():
     p_ca.add_argument("--config", required=True)
     p_ca.set_defaults(func=cmd_candidate_assembly)
 
-    p_aa = sub.add_parser("annotation-assessment", help="Generate the initial annotation assessment report")
+    p_aa = sub.add_parser("annotation-assessment", help="Regenerate annotation assessment report from existing diagnosis/refinement outputs")
     p_aa.add_argument("--config", required=True)
     p_aa.set_defaults(func=cmd_annotation_assessment)
 
