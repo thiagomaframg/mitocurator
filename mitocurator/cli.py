@@ -10,6 +10,7 @@ from .io import infer_format
 from .mitofinder_runner import run_mitofinder_for_fasta
 from .read_support import run_read_support
 from .read_mapping import run_read_mapping
+from .variant_evidence import run_variant_evidence
 from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
@@ -80,6 +81,15 @@ def cmd_read_mapping(args):
     print(f"  {outdir / 'mapping_summary.tsv'}")
     print(f"  {outdir / 'coverage_by_position.tsv'}")
     print(f"  {outdir / 'coverage_by_gene.tsv'}")
+
+
+def cmd_variant_evidence(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_variant_evidence(config, root, ensure_dir(root / "09_variant_evidence"))
+    print(f"Variant evidence written to: {outdir}")
+    print(f"  {outdir / 'variant_summary.tsv'}")
+    print(f"  {outdir / 'gene_variant_evidence.tsv'}")
 
 
 def cmd_targeted_extraction(args):
@@ -346,6 +356,10 @@ def build_parser():
     p_rm = sub.add_parser("read-mapping", help="Map reads to the current mitogenome and summarize coverage")
     p_rm.add_argument("--config", required=True)
     p_rm.set_defaults(func=cmd_read_mapping)
+
+    p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
+    p_ve.add_argument("--config", required=True)
+    p_ve.set_defaults(func=cmd_variant_evidence)
 
     p_te = sub.add_parser("targeted-extraction", help="Run only the targeted-extraction stage")
     p_te.add_argument("--config", required=True)
