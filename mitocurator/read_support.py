@@ -233,6 +233,60 @@ def _build_bam_for_read_set(read_set: dict, refined_fa: Path, outdir: Path, thre
     return bam if bam.exists() else None
 
 
+def _bam_from_read_mapping(root: Path, read_set: dict):
+    """Return BAM produced by the read-mapping stage, if available."""
+    name = read_set["name"]
+    bam = root / "08_read_mapping" / f"{name}.sorted.bam"
+    bai = Path(f"{bam}.bai")
+    if bam.exists() and bai.exists():
+        return bam
+    return None
+
+
+def _collect_bams_for_read_support(
+    config: dict,
+    root: Path,
+    read_sets: list,
+    refined_fa: Path,
+    outdir: Path,
+    threads: int,
+):
+    """Collect BAMs for read support.
+
+    By default, reuse BAMs produced by the dedicated read-mapping stage.
+    If read_support.fallback_remap_if_missing is true, missing BAMs are
+    generated through the legacy internal mapping path.
+    """
+    use_existing_read_mapping = bool(
+        safe_get(config, ["read_support", "use_existing_read_mapping"], True)
+    )
+    fallback_remap = bool(
+        safe_get(config, ["read_support", "fallback_remap_if_missing"], True)
+    )
+
+    bams = {}
+
+    for rs in read_sets:
+        name = rs["name"]
+        bam = None
+
+        if use_existing_read_mapping:
+            bam = _bam_from_read_mapping(root, rs)
+            if bam is not None:
+                print(f"Using read-mapping BAM for read_set {name}: {bam}")
+
+        if bam is None:
+            if use_existing_read_mapping and not fallback_remap:
+                raise FileNotFoundError(
+                    f"Missing read-mapping BAM for read_set '{name}' and fallback remap is disabled."
+                )
+            bam = _build_bam_for_read_set(rs, refined_fa, outdir, threads)
+
+        bams[name] = bam
+
+    return bams
+
+
 def _aa_for_codon(codon: str, code: int):
     if len(codon) != 3 or any(b not in "ACGT" for b in codon):
         return "X"
@@ -270,7 +324,15 @@ def run_read_support(config: dict, refined_gb: Path, refinement_dir: Path, outdi
     refined_fa = outdir / "refined.fa"
     _extract_ref_fasta(refined_gb, refined_fa)
     threads = int(safe_get(config, ["read_support", "threads"], 8))
-    bams = {rs["name"]: _build_bam_for_read_set(rs, refined_fa, outdir, threads) for rs in read_sets}
+    root = outdir.parent
+    bams = _collect_bams_for_read_support(
+        config,
+        root,
+        read_sets,
+        refined_fa,
+        outdir,
+        threads,
+    )
 
     code = get_genetic_code(config, default=5)
     flank = int(safe_get(config, ["read_support", "flank_bp"], 20))
