@@ -6,6 +6,7 @@ from .check_tools import check_tools
 from .gene_qc import diagnose
 from .rotate import rotate_to_gene
 from .refinement import refine_annotation
+from .final_report import generate_final_report
 
 def outdir_from_config(config: dict) -> Path:
     outdir = safe_get(config, ["output", "outdir"], None)
@@ -39,33 +40,36 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/5] Tool check: {tc}")
+    print(f"[1/6] Tool check: {tc}")
 
     annotated_gb = config["input"]["mitogenome"]
-    print(f"[2/5] MitoFinder annotation: {annotated_gb}")
+    print(f"[2/6] MitoFinder annotation: {annotated_gb}")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
     if refinement_enabled:
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
-        print(f"[3/5] Annotation refinement: {refined_gb}")
+        print(f"[3/6] Annotation refinement: {refined_gb}")
     else:
-        print("[3/5] Annotation refinement: disabled")
+        print("[3/6] Annotation refinement: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[4/5] Rotation: {rotated_input}")
+        print(f"[4/6] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
     except Exception as e:
-        print(f"[4/5] Rotation skipped/failed: {e}")
+        print(f"[4/6] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for diagnosis.")
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[5/5] Diagnosis: {qc_dir}")
+    print(f"[5/6] Diagnosis: {qc_dir}")
+
+    fr_md, fr_tsv = generate_final_report(root)
+    print(f"[6/6] Final report: {fr_md}")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
@@ -78,6 +82,8 @@ def cmd_run(args):
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
+    print(f"  {fr_tsv}")
+    print(f"  {fr_md}")
 
 def build_parser():
     p = argparse.ArgumentParser(prog="mitocurator", description="MitoCurator v0.1-dev")
