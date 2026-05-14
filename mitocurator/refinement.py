@@ -741,22 +741,6 @@ def refine_annotation(config, input_gb, outdir):
             outdir / "problematic_cds_reference_check.tsv",
         )
 
-
-    if bool(safe_get(config, ["refinement", "compare_candidates_to_reference"], False)):
-        generate_reference_similarity_candidates(
-            config,
-            record,
-            outdir / "missing_gene_candidates.tsv",
-            outdir / "reference_similarity_candidates.tsv",
-        )
-
-    if bool(safe_get(config, ["refinement", "compare_problematic_cds_to_reference"], False)):
-        generate_problematic_cds_reference_check(
-            config,
-            record,
-            outdir / "problematic_cds_reference_check.tsv",
-        )
-
     write_missing_gene_candidate_proteins(config, record, outdir / "missing_gene_candidates.tsv", outdir / "missing_gene_candidate_proteins.faa")
     write_problematic_cds_proteins(config, record, outdir / "problematic_cds_proteins.faa")
     generate_curation_recommendations(config, outdir)
