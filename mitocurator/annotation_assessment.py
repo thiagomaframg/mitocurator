@@ -529,6 +529,31 @@ def _count_by(rows: List[Dict[str, str]], key: str) -> Dict[str, int]:
     return counts
 
 
+def _html_escape(value: object) -> str:
+    return html.escape(str(value if value is not None else "."))
+
+
+def _status_class(value: str) -> str:
+    v = str(value or "").upper()
+    if v in {"OK", "KEEP", "PRESENT"}:
+        return "ok"
+    if "HIGH" in v or "PROBLEM" in v or "MISSING" in v:
+        return "problem"
+    if "MEDIUM" in v or "REVIEW" in v or "CANDIDATE" in v:
+        return "warning"
+    if "LOW" in v:
+        return "low"
+    return "neutral"
+
+
+def _count_by(rows: List[Dict[str, str]], key: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key, ".") or ".")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
 def _write_html_report(
     html_path: Path,
     evidence: List[Dict[str, str]],
@@ -580,7 +605,7 @@ body {
   line-height: 1.45;
 }
 .container {
-  max-width: 1200px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 32px 20px 56px;
 }
@@ -593,9 +618,10 @@ body {
 }
 .header h1 { margin: 0 0 8px; font-size: 30px; }
 .header p { margin: 0; opacity: .92; }
+
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px;
   margin: 20px 0;
 }
@@ -631,30 +657,94 @@ body {
   color: var(--muted);
   font-size: 14px;
 }
-.table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 14px;
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 10px;
   font-size: 13px;
 }
-th {
-  text-align: left;
-  background: #f8fafc;
+.dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot.ok { background: var(--ok); }
+.dot.warning { background: var(--warn); }
+.dot.problem { background: var(--problem); }
+.dot.low { background: var(--low); }
+.dot.neutral { background: var(--accent); }
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+.gene-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: white;
+  padding: 15px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .04);
+}
+.gene-card.ok { border-left: 7px solid var(--ok); }
+.gene-card.warning { border-left: 7px solid var(--warn); }
+.gene-card.problem { border-left: 7px solid var(--problem); }
+.gene-card.low { border-left: 7px solid var(--low); }
+.gene-card.neutral { border-left: 7px solid var(--accent); }
+
+.gene-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.gene-title {
+  font-size: 18px;
+  font-weight: 760;
+}
+.gene-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.card-line {
+  margin: 7px 0;
+  font-size: 13px;
+}
+.card-line strong {
   color: #334155;
-  border-bottom: 1px solid var(--border);
-  padding: 10px;
-  white-space: nowrap;
 }
-td {
-  border-bottom: 1px solid var(--border);
-  padding: 9px 10px;
-  vertical-align: top;
+.card-text {
+  font-size: 13px;
+  color: #374151;
+  margin-top: 9px;
 }
-tr:last-child td { border-bottom: none; }
+.chips, .source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip {
+  background: #f1f5f9;
+  color: #334155;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .badge {
   display: inline-block;
   border-radius: 999px;
@@ -678,6 +768,7 @@ code {
   background: #f1f5f9;
   padding: 2px 5px;
   border-radius: 6px;
+  font-size: 11px;
 }
 .footer {
   color: var(--muted);
@@ -689,72 +780,107 @@ code {
     def badge(value: str) -> str:
         return f'<span class="badge {_status_class(value)}">{_html_escape(value)}</span>'
 
-    def render_inventory_table(rows: List[Dict[str, str]]) -> str:
+    def chips(values: str, limit: int = 5) -> str:
+        items = [x for x in str(values or ".").split(";") if x and x != "."]
+        if not items:
+            return ""
+        html_items = "".join(f"<span class='chip'>{_html_escape(x)}</span>" for x in items[:limit])
+        if len(items) > limit:
+            html_items += f"<span class='chip'>+{len(items) - limit} more</span>"
+        return f"<div class='chips'>{html_items}</div>"
+
+    def sources(values: str, limit: int = 4) -> str:
+        items = [x for x in str(values or ".").split(";") if x and x != "."]
+        if not items:
+            return ""
+        html_items = "".join(f"<code>{_html_escape(x)}</code>" for x in items[:limit])
+        if len(items) > limit:
+            html_items += f"<code>+{len(items) - limit} more</code>"
+        return f"<div class='source-list'>{html_items}</div>"
+
+    def render_inventory_cards(rows: List[Dict[str, str]]) -> str:
         if not rows:
             return "<p class='note'>No gene inventory rows available.</p>"
-        lines = [
-            "<div class='table-wrap'><table>",
-            "<thead><tr><th>Gene</th><th>Type</th><th>Expected</th><th>Status</th><th>Priority</th><th>Action</th><th>Interpretation</th></tr></thead><tbody>",
-        ]
+        cards = ["<div class='card-grid'>"]
         for r in rows:
-            lines.append(
-                "<tr>"
-                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
-                f"<td>{_html_escape(r.get('type', '.'))}</td>"
-                f"<td>{badge(r.get('expected_status', '.'))}</td>"
-                f"<td>{badge(r.get('annotation_status', '.'))}</td>"
-                f"<td>{badge(r.get('annotation_priority', '.'))}</td>"
-                f"<td>{_html_escape(r.get('recommended_action', '.'))}</td>"
-                f"<td>{_html_escape(r.get('annotation_interpretation', '.'))}</td>"
-                "</tr>"
-            )
-        lines.append("</tbody></table></div>")
-        return "\n".join(lines)
+            status = r.get("annotation_status", ".")
+            priority = r.get("annotation_priority", ".")
+            card_class = _status_class(status)
 
-    def render_review_table(rows: List[Dict[str, str]]) -> str:
+            cards.append(
+                f"<div class='gene-card {card_class}'>"
+                "<div class='gene-card-header'>"
+                f"<div><div class='gene-title'>{_html_escape(r.get('gene', '.'))}</div>"
+                f"<div class='gene-subtitle'>{_html_escape(r.get('type', '.'))}</div></div>"
+                f"<div>{badge(priority)}</div>"
+                "</div>"
+                f"<div class='card-line'><strong>Status:</strong> {badge(status)}</div>"
+                f"<div class='card-line'><strong>Expected:</strong> {badge(r.get('expected_status', '.'))}</div>"
+                f"<div class='card-line'><strong>Action:</strong> {_html_escape(r.get('recommended_action', '.'))}</div>"
+                f"<div class='card-text'>{_html_escape(r.get('annotation_interpretation', '.'))}</div>"
+                f"{chips(r.get('annotation_issues', '.'))}"
+                f"{chips(r.get('annotation_recommendations', '.'))}"
+                "</div>"
+            )
+        cards.append("</div>")
+        return "\n".join(cards)
+
+    def render_review_cards(rows: List[Dict[str, str]]) -> str:
         if not rows:
             return "<p class='note'>No review targets detected.</p>"
-        lines = [
-            "<div class='table-wrap'><table>",
-            "<thead><tr><th>Gene</th><th>Priority</th><th>Evidence sources</th><th>Issues</th><th>Recommendations</th><th>Interpretation</th></tr></thead><tbody>",
-        ]
+        cards = ["<div class='card-grid'>"]
         for r in rows:
-            lines.append(
-                "<tr>"
-                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
-                f"<td>{badge(r.get('annotation_priority', '.'))}</td>"
-                f"<td>{_html_escape(r.get('n_annotation_evidence_sources', '.'))}</td>"
-                f"<td>{_html_escape(r.get('annotation_issues', '.'))}</td>"
-                f"<td>{_html_escape(r.get('annotation_recommendations', '.'))}</td>"
-                f"<td>{_html_escape(r.get('annotation_interpretation', '.'))}</td>"
-                "</tr>"
-            )
-        lines.append("</tbody></table></div>")
-        return "\n".join(lines)
+            priority = r.get("annotation_priority", ".")
+            card_class = _status_class(priority)
 
-    def render_evidence_table(rows: List[Dict[str, str]], limit: int = 40) -> str:
+            cards.append(
+                f"<div class='gene-card {card_class}'>"
+                "<div class='gene-card-header'>"
+                f"<div><div class='gene-title'>{_html_escape(r.get('gene', '.'))}</div>"
+                f"<div class='gene-subtitle'>{_html_escape(r.get('n_annotation_evidence_sources', '.'))} evidence source(s)</div></div>"
+                f"<div>{badge(priority)}</div>"
+                "</div>"
+                f"<div class='card-text'>{_html_escape(r.get('annotation_interpretation', '.'))}</div>"
+                f"{chips(r.get('annotation_issues', '.'))}"
+                f"{chips(r.get('annotation_recommendations', '.'))}"
+                f"{sources(r.get('annotation_evidence_sources', '.'))}"
+                "</div>"
+            )
+        cards.append("</div>")
+        return "\n".join(cards)
+
+    def render_evidence_cards(rows: List[Dict[str, str]], limit: int = 24) -> str:
         if not rows:
             return "<p class='note'>No annotation evidence rows available.</p>"
-        lines = [
-            "<div class='table-wrap'><table>",
-            "<thead><tr><th>Gene</th><th>Issue</th><th>Status</th><th>Priority</th><th>Recommendation</th><th>Evidence source</th><th>Records</th></tr></thead><tbody>",
-        ]
+        cards = ["<div class='card-grid'>"]
         for r in rows[:limit]:
-            lines.append(
-                "<tr>"
-                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
-                f"<td>{_html_escape(r.get('issue_type', '.'))}</td>"
-                f"<td>{badge(r.get('status', '.'))}</td>"
-                f"<td>{badge(r.get('priority', '.'))}</td>"
-                f"<td>{_html_escape(r.get('recommendation', '.'))}</td>"
-                f"<td><code>{_html_escape(r.get('evidence_source', '.'))}</code></td>"
-                f"<td>{_html_escape(r.get('n_records', '.'))}</td>"
-                "</tr>"
+            priority = r.get("priority", ".")
+            status = r.get("status", ".")
+            card_class = _status_class(priority if priority != "." else status)
+
+            cards.append(
+                f"<div class='gene-card {card_class}'>"
+                "<div class='gene-card-header'>"
+                f"<div><div class='gene-title'>{_html_escape(r.get('gene', '.'))}</div>"
+                f"<div class='gene-subtitle'>{_html_escape(r.get('issue_type', '.'))}</div></div>"
+                f"<div>{badge(priority)}</div>"
+                "</div>"
+                f"<div class='card-line'><strong>Status:</strong> {badge(status)}</div>"
+                f"<div class='card-line'><strong>Recommendation:</strong> {_html_escape(r.get('recommendation', '.'))}</div>"
+                f"<div class='card-line'><strong>Records:</strong> {_html_escape(r.get('n_records', '.'))}</div>"
+                f"{sources(r.get('evidence_source', '.'))}"
+                "</div>"
             )
-        lines.append("</tbody></table></div>")
+        cards.append("</div>")
         if len(rows) > limit:
-            lines.append(f"<p class='note'>Showing first {limit} of {len(rows)} evidence rows. See TSV for complete output.</p>")
-        return "\n".join(lines)
+            cards.append(f"<p class='note'>Showing first {limit} of {len(rows)} evidence items. See TSV for complete output.</p>")
+        return "\n".join(cards)
+
+    type_counts = _html_escape(", ".join(f"{k}={v}" for k, v in sorted(by_type.items())) or "not available")
+    status_counts = _html_escape(", ".join(f"{k}={v}" for k, v in sorted(by_status.items())) or "not available")
+
+    available_html = "".join(f"<li><code>{_html_escape(x)}</code></li>" for x in available_files) or "<li>None</li>"
+    unavailable_html = "".join(f"<li><code>{_html_escape(x)}</code></li>" for x in unavailable_files) or "<li>None</li>"
 
     html_text = f"""<!doctype html>
 <html lang="en">
@@ -780,27 +906,34 @@ code {
   </div>
 
   <div class="section">
-    <h2>Overview by feature type</h2>
-    <p class="note">Type counts: {_html_escape(', '.join(f'{k}={v}' for k, v in sorted(by_type.items())) or 'not available')}</p>
-    <p class="note">Status counts: {_html_escape(', '.join(f'{k}={v}' for k, v in sorted(by_status.items())) or 'not available')}</p>
+    <h2>Legend and overview</h2>
+    <p class="note">Type counts: {type_counts}</p>
+    <p class="note">Status counts: {status_counts}</p>
+    <div class="legend">
+      <div class="legend-item"><span class="dot ok"></span> OK / keep</div>
+      <div class="legend-item"><span class="dot problem"></span> High-priority, missing or problematic</div>
+      <div class="legend-item"><span class="dot warning"></span> Review / candidate / medium priority</div>
+      <div class="legend-item"><span class="dot low"></span> Low-priority signal</div>
+      <div class="legend-item"><span class="dot neutral"></span> Informational / not classified</div>
+    </div>
   </div>
 
   <div class="section">
     <h2>Review targets</h2>
     <p class="note">Genes/features requiring curator attention before downstream read-backed correction.</p>
-    {render_review_table(review_rows)}
+    {render_review_cards(review_rows)}
   </div>
 
   <div class="section">
     <h2>Complete annotation gene inventory</h2>
     <p class="note">All expected genes/features, including OK/KEEP entries.</p>
-    {render_inventory_table(inventory_rows)}
+    {render_inventory_cards(inventory_rows)}
   </div>
 
   <div class="section">
     <h2>Annotation evidence summary</h2>
-    <p class="note">Aggregated annotation-level evidence used to classify genes/features.</p>
-    {render_evidence_table(evidence_rows)}
+    <p class="note">Aggregated annotation-level evidence used to classify genes/features. The complete machine-readable table is available as TSV.</p>
+    {render_evidence_cards(evidence_rows)}
   </div>
 
   <div class="section">
@@ -808,11 +941,11 @@ code {
     <div class="files">
       <div>
         <h3>Available</h3>
-        <ul>{''.join(f'<li><code>{_html_escape(x)}</code></li>' for x in available_files) or '<li>None</li>'}</ul>
+        <ul>{available_html}</ul>
       </div>
       <div>
         <h3>Not available</h3>
-        <ul>{''.join(f'<li><code>{_html_escape(x)}</code></li>' for x in unavailable_files) or '<li>None</li>'}</ul>
+        <ul>{unavailable_html}</ul>
       </div>
     </div>
   </div>
