@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 from pathlib import Path
 from typing import Dict, List
 
@@ -503,6 +504,339 @@ def _build_gene_inventory(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return inventory
 
 
+def _html_escape(value: object) -> str:
+    return html.escape(str(value if value is not None else "."))
+
+
+def _status_class(value: str) -> str:
+    v = str(value or "").upper()
+    if v in {"OK", "KEEP", "PRESENT"}:
+        return "ok"
+    if "HIGH" in v or "PROBLEM" in v or "MISSING" in v:
+        return "problem"
+    if "MEDIUM" in v or "REVIEW" in v or "CANDIDATE" in v:
+        return "warning"
+    if "LOW" in v:
+        return "low"
+    return "neutral"
+
+
+def _count_by(rows: List[Dict[str, str]], key: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key, ".") or ".")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _write_html_report(
+    html_path: Path,
+    evidence: List[Dict[str, str]],
+    inventory_rows: List[Dict[str, str]],
+    review_rows: List[Dict[str, str]],
+    evidence_rows: List[Dict[str, str]],
+    md_path: Path,
+    annotation_summary_tsv: Path,
+    gene_inventory_tsv: Path,
+    gene_summary_tsv: Path,
+):
+    total_genes = len(inventory_rows)
+    ok_genes = sum(1 for r in inventory_rows if r.get("annotation_status") == "OK")
+    problem_genes = sum(1 for r in inventory_rows if r.get("annotation_status") == "PROBLEMATIC")
+    missing_genes = sum(1 for r in inventory_rows if r.get("annotation_status") == "MISSING_OR_INCOMPLETE")
+    review_targets = len(review_rows)
+    high_targets = sum(1 for r in review_rows if r.get("annotation_priority") == "HIGH")
+
+    available_files = [r["file"] for r in evidence if r.get("status") == "available"]
+    unavailable_files = [r["file"] for r in evidence if r.get("status") != "available"]
+
+    by_type = _count_by(inventory_rows, "type")
+    by_status = _count_by(inventory_rows, "annotation_status")
+
+    css = """
+:root {
+  --bg: #f6f8fb;
+  --panel: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --ok: #047857;
+  --ok-bg: #d1fae5;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --problem: #b91c1c;
+  --problem-bg: #fee2e2;
+  --low: #475569;
+  --low-bg: #e2e8f0;
+  --accent: #1d4ed8;
+  --accent-bg: #dbeafe;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  line-height: 1.45;
+}
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 20px 56px;
+}
+.header {
+  background: linear-gradient(135deg, #1e3a8a, #2563eb);
+  color: white;
+  border-radius: 20px;
+  padding: 28px 32px;
+  box-shadow: 0 12px 30px rgba(37, 99, 235, .18);
+}
+.header h1 { margin: 0 0 8px; font-size: 30px; }
+.header p { margin: 0; opacity: .92; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .05);
+}
+.card .label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.card .value {
+  font-size: 30px;
+  font-weight: 750;
+}
+.section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  margin-top: 18px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .04);
+}
+.section h2 {
+  margin: 0 0 14px;
+  font-size: 21px;
+}
+.note {
+  color: var(--muted);
+  font-size: 14px;
+}
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  background: #f8fafc;
+  color: #334155;
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  white-space: nowrap;
+}
+td {
+  border-bottom: 1px solid var(--border);
+  padding: 9px 10px;
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warning { background: var(--warn-bg); color: var(--warn); }
+.badge.problem { background: var(--problem-bg); color: var(--problem); }
+.badge.low { background: var(--low-bg); color: var(--low); }
+.badge.neutral { background: var(--accent-bg); color: var(--accent); }
+.files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.files ul { margin: 8px 0 0; padding-left: 20px; }
+code {
+  background: #f1f5f9;
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+.footer {
+  color: var(--muted);
+  margin-top: 22px;
+  font-size: 13px;
+}
+"""
+
+    def badge(value: str) -> str:
+        return f'<span class="badge {_status_class(value)}">{_html_escape(value)}</span>'
+
+    def render_inventory_table(rows: List[Dict[str, str]]) -> str:
+        if not rows:
+            return "<p class='note'>No gene inventory rows available.</p>"
+        lines = [
+            "<div class='table-wrap'><table>",
+            "<thead><tr><th>Gene</th><th>Type</th><th>Expected</th><th>Status</th><th>Priority</th><th>Action</th><th>Interpretation</th></tr></thead><tbody>",
+        ]
+        for r in rows:
+            lines.append(
+                "<tr>"
+                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
+                f"<td>{_html_escape(r.get('type', '.'))}</td>"
+                f"<td>{badge(r.get('expected_status', '.'))}</td>"
+                f"<td>{badge(r.get('annotation_status', '.'))}</td>"
+                f"<td>{badge(r.get('annotation_priority', '.'))}</td>"
+                f"<td>{_html_escape(r.get('recommended_action', '.'))}</td>"
+                f"<td>{_html_escape(r.get('annotation_interpretation', '.'))}</td>"
+                "</tr>"
+            )
+        lines.append("</tbody></table></div>")
+        return "\n".join(lines)
+
+    def render_review_table(rows: List[Dict[str, str]]) -> str:
+        if not rows:
+            return "<p class='note'>No review targets detected.</p>"
+        lines = [
+            "<div class='table-wrap'><table>",
+            "<thead><tr><th>Gene</th><th>Priority</th><th>Evidence sources</th><th>Issues</th><th>Recommendations</th><th>Interpretation</th></tr></thead><tbody>",
+        ]
+        for r in rows:
+            lines.append(
+                "<tr>"
+                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
+                f"<td>{badge(r.get('annotation_priority', '.'))}</td>"
+                f"<td>{_html_escape(r.get('n_annotation_evidence_sources', '.'))}</td>"
+                f"<td>{_html_escape(r.get('annotation_issues', '.'))}</td>"
+                f"<td>{_html_escape(r.get('annotation_recommendations', '.'))}</td>"
+                f"<td>{_html_escape(r.get('annotation_interpretation', '.'))}</td>"
+                "</tr>"
+            )
+        lines.append("</tbody></table></div>")
+        return "\n".join(lines)
+
+    def render_evidence_table(rows: List[Dict[str, str]], limit: int = 40) -> str:
+        if not rows:
+            return "<p class='note'>No annotation evidence rows available.</p>"
+        lines = [
+            "<div class='table-wrap'><table>",
+            "<thead><tr><th>Gene</th><th>Issue</th><th>Status</th><th>Priority</th><th>Recommendation</th><th>Evidence source</th><th>Records</th></tr></thead><tbody>",
+        ]
+        for r in rows[:limit]:
+            lines.append(
+                "<tr>"
+                f"<td><strong>{_html_escape(r.get('gene', '.'))}</strong></td>"
+                f"<td>{_html_escape(r.get('issue_type', '.'))}</td>"
+                f"<td>{badge(r.get('status', '.'))}</td>"
+                f"<td>{badge(r.get('priority', '.'))}</td>"
+                f"<td>{_html_escape(r.get('recommendation', '.'))}</td>"
+                f"<td><code>{_html_escape(r.get('evidence_source', '.'))}</code></td>"
+                f"<td>{_html_escape(r.get('n_records', '.'))}</td>"
+                "</tr>"
+            )
+        lines.append("</tbody></table></div>")
+        if len(rows) > limit:
+            lines.append(f"<p class='note'>Showing first {limit} of {len(rows)} evidence rows. See TSV for complete output.</p>")
+        return "\n".join(lines)
+
+    html_text = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MitoCurator annotation assessment report</title>
+<style>{css}</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>MitoCurator annotation assessment report</h1>
+    <p>Initial annotation QC, evidence summary and curator-facing recommendations.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Genes/features in inventory</div><div class="value">{total_genes}</div></div>
+    <div class="card"><div class="label">OK / keep</div><div class="value">{ok_genes}</div></div>
+    <div class="card"><div class="label">Problematic</div><div class="value">{problem_genes}</div></div>
+    <div class="card"><div class="label">Missing/incomplete</div><div class="value">{missing_genes}</div></div>
+    <div class="card"><div class="label">Review targets</div><div class="value">{review_targets}</div></div>
+    <div class="card"><div class="label">High-priority targets</div><div class="value">{high_targets}</div></div>
+  </div>
+
+  <div class="section">
+    <h2>Overview by feature type</h2>
+    <p class="note">Type counts: {_html_escape(', '.join(f'{k}={v}' for k, v in sorted(by_type.items())) or 'not available')}</p>
+    <p class="note">Status counts: {_html_escape(', '.join(f'{k}={v}' for k, v in sorted(by_status.items())) or 'not available')}</p>
+  </div>
+
+  <div class="section">
+    <h2>Review targets</h2>
+    <p class="note">Genes/features requiring curator attention before downstream read-backed correction.</p>
+    {render_review_table(review_rows)}
+  </div>
+
+  <div class="section">
+    <h2>Complete annotation gene inventory</h2>
+    <p class="note">All expected genes/features, including OK/KEEP entries.</p>
+    {render_inventory_table(inventory_rows)}
+  </div>
+
+  <div class="section">
+    <h2>Annotation evidence summary</h2>
+    <p class="note">Aggregated annotation-level evidence used to classify genes/features.</p>
+    {render_evidence_table(evidence_rows)}
+  </div>
+
+  <div class="section">
+    <h2>Evidence files</h2>
+    <div class="files">
+      <div>
+        <h3>Available</h3>
+        <ul>{''.join(f'<li><code>{_html_escape(x)}</code></li>' for x in available_files) or '<li>None</li>'}</ul>
+      </div>
+      <div>
+        <h3>Not available</h3>
+        <ul>{''.join(f'<li><code>{_html_escape(x)}</code></li>' for x in unavailable_files) or '<li>None</li>'}</ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Output files</h2>
+    <ul>
+      <li><code>{_html_escape(md_path.name)}</code> — Markdown report</li>
+      <li><code>{_html_escape(annotation_summary_tsv.name)}</code> — annotation evidence summary</li>
+      <li><code>{_html_escape(gene_inventory_tsv.name)}</code> — complete gene inventory</li>
+      <li><code>{_html_escape(gene_summary_tsv.name)}</code> — review targets</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    Diagnostic-only report. No GenBank file is modified by this assessment.
+  </div>
+</div>
+</body>
+</html>
+"""
+    html_path.write_text(html_text, encoding="utf-8")
+
+
 def _write_tsv(path: Path, rows: List[Dict[str, str]], fieldnames: List[str]):
     with open(path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
@@ -520,6 +854,7 @@ def generate_annotation_assessment_report(root: Path):
     """
     report_dir = ensure_dir(root / "06_annotation_assessment")
     md_path = report_dir / "annotation_assessment_report.md"
+    html_path = report_dir / "annotation_assessment_report.html"
     annotation_summary_tsv = report_dir / "annotation_evidence_summary.tsv"
     gene_summary_tsv = report_dir / "annotation_review_targets.tsv"
     gene_inventory_tsv = report_dir / "annotation_gene_inventory.tsv"
@@ -656,6 +991,18 @@ def generate_annotation_assessment_report(root: Path):
             "This report is **diagnostic-only**. It does not alter the GenBank file, "
             "does not accept or reject candidate corrections automatically, and does not replace manual curation.\n"
         )
+
+    _write_html_report(
+        html_path=html_path,
+        evidence=evidence,
+        inventory_rows=inventory_rows,
+        review_rows=gene_rows,
+        evidence_rows=collapsed_rows,
+        md_path=md_path,
+        annotation_summary_tsv=annotation_summary_tsv,
+        gene_inventory_tsv=gene_inventory_tsv,
+        gene_summary_tsv=gene_summary_tsv,
+    )
 
     return md_path, annotation_summary_tsv
 
