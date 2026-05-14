@@ -13,7 +13,7 @@ from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
 from .candidate_assembly import run_candidate_assembly
-from .final_report import generate_final_report
+from .annotation_assessment import generate_annotation_assessment_report
 
 
 def outdir_from_config(config: dict) -> Path:
@@ -40,9 +40,13 @@ def cmd_check_tools(args):
 
 def cmd_diagnose(args):
     config = load_config(args.config)
-    outdir = ensure_dir(outdir_from_config(config) / "07_gene_qc")
+    root = outdir_from_config(config)
+    outdir = ensure_dir(root / "07_gene_qc")
     diagnose(config, outdir)
+    report_md, summary_tsv = generate_annotation_assessment_report(root)
     print(f"Diagnostic files written to: {outdir}")
+    print(f"Annotation assessment report written to: {report_md}")
+    print(f"Annotation assessment summary written to: {summary_tsv}")
 
 
 def cmd_rotate(args):
@@ -120,12 +124,12 @@ def cmd_candidate_assembly(args):
     print(f"Candidate assembly written to: {ca_dir}")
 
 
-def cmd_final_report(args):
+def cmd_annotation_assessment(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
-    final_report_md, final_report_tsv = generate_final_report(root)
-    print(f"Final report written to: {final_report_md}")
-    print(f"Final summary written to: {final_report_tsv}")
+    report_md, summary_tsv = generate_annotation_assessment_report(root)
+    print(f"Annotation assessment report written to: {report_md}")
+    print(f"Annotation assessment summary written to: {summary_tsv}")
 
 
 def cmd_run(args):
@@ -135,7 +139,7 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/10] Tool check: {tc}")
+    print(f"[1/11] Tool check: {tc}")
 
     current_input = config["input"]["mitogenome"]
     fmt = infer_format(current_input)
@@ -144,11 +148,11 @@ def cmd_run(args):
         mf_dir = ensure_dir(root / "03_mitofinder")
         annotated_gb = run_mitofinder_for_fasta(config, current_input, mf_dir)
         config["input"]["mitogenome"] = str(annotated_gb)
-        print(f"[2/10] MitoFinder annotation: {annotated_gb}")
+        print(f"[2/11] MitoFinder annotation: {annotated_gb}")
     else:
         annotated_gb = current_input
         config["input"]["mitogenome"] = str(annotated_gb)
-        print("[2/10] MitoFinder annotation: skipped (input already annotated GenBank)")
+        print("[2/11] MitoFinder annotation: skipped (input already annotated GenBank)")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
@@ -157,28 +161,36 @@ def cmd_run(args):
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
         config["input"]["mitogenome"] = str(refined_gb)
-        print(f"[3/10] Annotation refinement: {refined_gb}")
+        print(f"[3/11] Annotation refinement: {refined_gb}")
     else:
-        print("[3/10] Annotation refinement: disabled")
+        print("[3/11] Annotation refinement: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
         config["input"]["mitogenome"] = str(rotated_input)
-        print(f"[4/10] Rotation: {rotated_input}")
+        print(f"[4/11] Rotation: {rotated_input}")
     except Exception as e:
-        print(f"[4/10] Rotation skipped/failed: {e}")
+        print(f"[4/11] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for downstream steps.")
         config["input"]["mitogenome"] = str(refined_gb)
+
+    qc_dir = ensure_dir(root / "07_gene_qc")
+    diagnose(config, qc_dir)
+    print(f"[5/11] Diagnosis and annotation assessment inputs: {qc_dir}")
+
+    assessment_md, assessment_tsv = generate_annotation_assessment_report(root)
+    print(f"[6/11] Annotation assessment report: {assessment_md}")
+    print(f"       Annotation assessment summary: {assessment_tsv}")
 
     read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
     if read_support_enabled:
         rs_dir = ensure_dir(root / "06_read_support")
         run_read_support(config, Path(refined_gb), root / "05_refinement", rs_dir)
-        print(f"[5/10] Read support: {rs_dir}")
+        print(f"[7/11] Read support: {rs_dir}")
     else:
-        print("[5/10] Read support: disabled")
+        print("[7/11] Read support: disabled")
 
     targeted_enabled = bool(safe_get(config, ["targeted_extraction", "enabled"], False))
     if targeted_enabled:
@@ -190,9 +202,9 @@ def cmd_run(args):
             root / "06_read_support",
             te_dir,
         )
-        print(f"[6/10] Targeted extraction: {te_dir}")
+        print(f"[8/11] Targeted extraction: {te_dir}")
     else:
-        print("[6/10] Targeted extraction: disabled")
+        print("[8/11] Targeted extraction: disabled")
 
     pools_enabled = bool(safe_get(config, ["reconstruction_pools", "enabled"], False))
     if pools_enabled:
@@ -204,9 +216,9 @@ def cmd_run(args):
             root / "08_targeted_extraction",
             pools_dir,
         )
-        print(f"[7/10] Reconstruction pools: {pools_dir}")
+        print(f"[9/11] Reconstruction pools: {pools_dir}")
     else:
-        print("[7/10] Reconstruction pools: disabled")
+        print("[9/11] Reconstruction pools: disabled")
 
     consensus_enabled = bool(safe_get(config, ["targeted_consensus", "enabled"], False))
     if consensus_enabled:
@@ -218,9 +230,9 @@ def cmd_run(args):
             root / "09_reconstruction_pools",
             cons_dir,
         )
-        print(f"[8/10] Targeted consensus: {cons_dir}")
+        print(f"[10/11] Targeted consensus: {cons_dir}")
     else:
-        print("[8/10] Targeted consensus: disabled")
+        print("[10/11] Targeted consensus: disabled")
 
     candidate_assembly_enabled = bool(safe_get(config, ["candidate_assembly", "enabled"], False))
     if candidate_assembly_enabled:
@@ -233,17 +245,9 @@ def cmd_run(args):
             root / "05_refinement",
             ca_dir,
         )
-        print(f"[9/10] Candidate assembly: {ca_dir}")
+        print(f"[11/11] Candidate assembly: {ca_dir}")
     else:
-        print("[9/10] Candidate assembly: disabled")
-
-    qc_dir = ensure_dir(root / "07_gene_qc")
-    diagnose(config, qc_dir)
-    print(f"[10/10] Diagnosis: {qc_dir}")
-
-    final_report_md, final_report_tsv = generate_final_report(root)
-    print(f"Final report: {final_report_md}")
-    print(f"Final summary: {final_report_tsv}")
+        print("[11/11] Candidate assembly: disabled")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
@@ -294,8 +298,8 @@ def cmd_run(args):
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")
     print(f"  {qc_dir / 'diagnostic_summary.md'}")
-    print(f"  {root / '12_final_report' / 'final_curation_report.md'}")
-    print(f"  {root / '12_final_report' / 'final_curation_summary.tsv'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_report.md'}")
+    print(f"  {root / '06_annotation_assessment' / 'annotation_curation_summary.tsv'}")
 
 
 def build_parser():
@@ -306,7 +310,7 @@ def build_parser():
     p_check.add_argument("--config", required=True)
     p_check.set_defaults(func=cmd_check_tools)
 
-    p_diag = sub.add_parser("diagnose", help="Run gene-level diagnostic report")
+    p_diag = sub.add_parser("diagnose", help="Run annotation QC and generate curation recommendations")
     p_diag.add_argument("--config", required=True)
     p_diag.set_defaults(func=cmd_diagnose)
 
@@ -334,9 +338,9 @@ def build_parser():
     p_ca.add_argument("--config", required=True)
     p_ca.set_defaults(func=cmd_candidate_assembly)
 
-    p_fr = sub.add_parser("final-report", help="Generate only the final aggregated curation report")
-    p_fr.add_argument("--config", required=True)
-    p_fr.set_defaults(func=cmd_final_report)
+    p_aa = sub.add_parser("annotation-assessment", help="Generate the initial annotation assessment report")
+    p_aa.add_argument("--config", required=True)
+    p_aa.set_defaults(func=cmd_annotation_assessment)
 
     p_run = sub.add_parser("run", help="Run initial all-in-one diagnostic workflow")
     p_run.add_argument("--config", required=True)
