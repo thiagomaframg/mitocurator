@@ -167,7 +167,7 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/11] Tool check: {tc}")
+    print(f"[1/13] Tool check: {tc}")
 
     current_input = config["input"]["mitogenome"]
     fmt = infer_format(current_input)
@@ -176,11 +176,11 @@ def cmd_run(args):
         mf_dir = ensure_dir(root / "03_mitofinder")
         annotated_gb = run_mitofinder_for_fasta(config, current_input, mf_dir)
         config["input"]["mitogenome"] = str(annotated_gb)
-        print(f"[2/11] MitoFinder annotation: {annotated_gb}")
+        print(f"[2/13] MitoFinder annotation: {annotated_gb}")
     else:
         annotated_gb = current_input
         config["input"]["mitogenome"] = str(annotated_gb)
-        print("[2/11] MitoFinder annotation: skipped (input already annotated GenBank)")
+        print("[2/13] MitoFinder annotation: skipped (input already annotated GenBank)")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
@@ -189,36 +189,52 @@ def cmd_run(args):
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
         config["input"]["mitogenome"] = str(refined_gb)
-        print(f"[3/11] Annotation refinement: {refined_gb}")
+        print(f"[3/13] Annotation refinement: {refined_gb}")
     else:
-        print("[3/11] Annotation refinement: disabled")
+        print("[3/13] Annotation refinement: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
         config["input"]["mitogenome"] = str(rotated_input)
-        print(f"[4/11] Rotation: {rotated_input}")
+        print(f"[4/13] Rotation: {rotated_input}")
     except Exception as e:
-        print(f"[4/11] Rotation skipped/failed: {e}")
+        print(f"[4/13] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for downstream steps.")
         config["input"]["mitogenome"] = str(refined_gb)
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[5/11] Diagnosis and annotation assessment inputs: {qc_dir}")
+    print(f"[5/13] Diagnosis and annotation assessment inputs: {qc_dir}")
 
     assessment_md, assessment_tsv = generate_annotation_assessment_report(root)
-    print(f"[6/11] Annotation assessment report: {assessment_md}")
+    print(f"[6/13] Annotation assessment report: {assessment_md}")
     print(f"       Annotation evidence summary: {assessment_tsv}")
+
+    read_mapping_enabled = bool(safe_get(config, ["read_mapping", "enabled"], True))
+    if read_mapping_enabled:
+        rm_dir = run_read_mapping(config, root, ensure_dir(root / "08_read_mapping"))
+        print(f"[7/13] Read mapping: {rm_dir}")
+    else:
+        print("[7/13] Read mapping: disabled")
+
+    variant_evidence_enabled = bool(
+        safe_get(config, ["variant_evidence", "enabled"], read_mapping_enabled)
+    )
+    if variant_evidence_enabled:
+        ve_dir = run_variant_evidence(config, root, ensure_dir(root / "09_variant_evidence"))
+        print(f"[8/13] Variant evidence: {ve_dir}")
+    else:
+        print("[8/13] Variant evidence: disabled")
 
     read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
     if read_support_enabled:
         rs_dir = ensure_dir(root / "06_read_support")
         run_read_support(config, Path(refined_gb), root / "05_refinement", rs_dir)
-        print(f"[7/11] Read support: {rs_dir}")
+        print(f"[9/13] Read support: {rs_dir}")
     else:
-        print("[7/11] Read support: disabled")
+        print("[9/13] Read support: disabled")
 
     targeted_enabled = bool(safe_get(config, ["targeted_extraction", "enabled"], False))
     if targeted_enabled:
@@ -230,9 +246,9 @@ def cmd_run(args):
             root / "06_read_support",
             te_dir,
         )
-        print(f"[8/11] Targeted extraction: {te_dir}")
+        print(f"[10/13] Targeted extraction: {te_dir}")
     else:
-        print("[8/11] Targeted extraction: disabled")
+        print("[10/13] Targeted extraction: disabled")
 
     pools_enabled = bool(safe_get(config, ["reconstruction_pools", "enabled"], False))
     if pools_enabled:
@@ -244,9 +260,9 @@ def cmd_run(args):
             root / "08_targeted_extraction",
             pools_dir,
         )
-        print(f"[9/11] Reconstruction pools: {pools_dir}")
+        print(f"[11/13] Reconstruction pools: {pools_dir}")
     else:
-        print("[9/11] Reconstruction pools: disabled")
+        print("[11/13] Reconstruction pools: disabled")
 
     consensus_enabled = bool(safe_get(config, ["targeted_consensus", "enabled"], False))
     if consensus_enabled:
@@ -258,9 +274,9 @@ def cmd_run(args):
             root / "09_reconstruction_pools",
             cons_dir,
         )
-        print(f"[10/11] Targeted consensus: {cons_dir}")
+        print(f"[12/13] Targeted consensus: {cons_dir}")
     else:
-        print("[10/11] Targeted consensus: disabled")
+        print("[12/13] Targeted consensus: disabled")
 
     candidate_assembly_enabled = bool(safe_get(config, ["candidate_assembly", "enabled"], False))
     if candidate_assembly_enabled:
@@ -273,9 +289,9 @@ def cmd_run(args):
             root / "05_refinement",
             ca_dir,
         )
-        print(f"[11/11] Candidate assembly: {ca_dir}")
+        print(f"[13/13] Candidate assembly: {ca_dir}")
     else:
-        print("[11/11] Candidate assembly: disabled")
+        print("[13/13] Candidate assembly: disabled")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
@@ -292,6 +308,17 @@ def cmd_run(args):
     print(f"  {root / '05_refinement' / 'problematic_cds_proteins.faa'}")
     print(f"  {root / '05_refinement' / 'curation_recommendations.tsv'}")
     print(f"  {root / '05_refinement' / 'curation_recommendations.md'}")
+
+    if read_mapping_enabled:
+        print(f"  {root / '08_read_mapping' / 'mitogenome_reference.fasta'}")
+        print(f"  {root / '08_read_mapping' / 'readsets.tsv'}")
+        print(f"  {root / '08_read_mapping' / 'mapping_summary.tsv'}")
+        print(f"  {root / '08_read_mapping' / 'coverage_by_position.tsv'}")
+        print(f"  {root / '08_read_mapping' / 'coverage_by_gene.tsv'}")
+
+    if variant_evidence_enabled:
+        print(f"  {root / '09_variant_evidence' / 'variant_summary.tsv'}")
+        print(f"  {root / '09_variant_evidence' / 'gene_variant_evidence.tsv'}")
 
     if read_support_enabled:
         print(f"  {root / '06_read_support' / 'problematic_stop_read_support.tsv'}")
