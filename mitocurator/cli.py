@@ -66,7 +66,7 @@ def cmd_read_support(args):
     refined_gb = root / "05_refinement" / "refined.gb"
     if not refined_gb.exists():
         raise FileNotFoundError(f"Missing refined GenBank: {refined_gb}")
-    rs_dir = ensure_dir(root / "06_read_support")
+    rs_dir = ensure_dir(root / "10_read_support")
     run_read_support(config, refined_gb, root / "05_refinement", rs_dir)
     print(f"Read support written to: {rs_dir}")
 
@@ -95,12 +95,12 @@ def cmd_variant_evidence(args):
 def cmd_targeted_extraction(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
-    te_dir = ensure_dir(root / "08_targeted_extraction")
+    te_dir = ensure_dir(root / "11_targeted_extraction")
     run_targeted_extraction(
         config,
         root,
         root / "05_refinement",
-        root / "06_read_support",
+        root / "10_read_support",
         te_dir,
     )
     print(f"Targeted extraction written to: {te_dir}")
@@ -109,12 +109,12 @@ def cmd_targeted_extraction(args):
 def cmd_reconstruction_pools(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
-    pools_dir = ensure_dir(root / "09_reconstruction_pools")
+    pools_dir = ensure_dir(root / "12_reconstruction_pools")
     run_reconstruction_pools(
         config,
         root,
-        root / "06_read_support",
-        root / "08_targeted_extraction",
+        root / "10_read_support",
+        root / "11_targeted_extraction",
         pools_dir,
     )
     print(f"Reconstruction pools written to: {pools_dir}")
@@ -123,12 +123,12 @@ def cmd_reconstruction_pools(args):
 def cmd_targeted_consensus(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
-    cons_dir = ensure_dir(root / "10_targeted_consensus")
+    cons_dir = ensure_dir(root / "13_targeted_consensus")
     run_targeted_consensus(
         config,
         root,
         root / "05_refinement",
-        root / "09_reconstruction_pools",
+        root / "12_reconstruction_pools",
         cons_dir,
     )
     print(f"Targeted consensus written to: {cons_dir}")
@@ -137,12 +137,12 @@ def cmd_targeted_consensus(args):
 def cmd_candidate_assembly(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
-    ca_dir = ensure_dir(root / "11_candidate_assembly")
+    ca_dir = ensure_dir(root / "14_candidate_assembly")
     run_candidate_assembly(
         config,
         root,
-        root / "10_targeted_consensus",
-        root / "09_reconstruction_pools",
+        root / "13_targeted_consensus",
+        root / "12_reconstruction_pools",
         root / "05_refinement",
         ca_dir,
     )
@@ -230,7 +230,7 @@ def cmd_run(args):
 
     read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
     if read_support_enabled:
-        rs_dir = ensure_dir(root / "06_read_support")
+        rs_dir = ensure_dir(root / "10_read_support")
         run_read_support(config, Path(refined_gb), root / "05_refinement", rs_dir)
         print(f"[9/13] Read support: {rs_dir}")
     else:
@@ -238,12 +238,12 @@ def cmd_run(args):
 
     targeted_enabled = bool(safe_get(config, ["targeted_extraction", "enabled"], False))
     if targeted_enabled:
-        te_dir = ensure_dir(root / "08_targeted_extraction")
+        te_dir = ensure_dir(root / "11_targeted_extraction")
         run_targeted_extraction(
             config,
             root,
             root / "05_refinement",
-            root / "06_read_support",
+            root / "10_read_support",
             te_dir,
         )
         print(f"[10/13] Targeted extraction: {te_dir}")
@@ -252,12 +252,12 @@ def cmd_run(args):
 
     pools_enabled = bool(safe_get(config, ["reconstruction_pools", "enabled"], False))
     if pools_enabled:
-        pools_dir = ensure_dir(root / "09_reconstruction_pools")
+        pools_dir = ensure_dir(root / "12_reconstruction_pools")
         run_reconstruction_pools(
             config,
             root,
-            root / "06_read_support",
-            root / "08_targeted_extraction",
+            root / "10_read_support",
+            root / "11_targeted_extraction",
             pools_dir,
         )
         print(f"[11/13] Reconstruction pools: {pools_dir}")
@@ -266,12 +266,12 @@ def cmd_run(args):
 
     consensus_enabled = bool(safe_get(config, ["targeted_consensus", "enabled"], False))
     if consensus_enabled:
-        cons_dir = ensure_dir(root / "10_targeted_consensus")
+        cons_dir = ensure_dir(root / "13_targeted_consensus")
         run_targeted_consensus(
             config,
             root,
             root / "05_refinement",
-            root / "09_reconstruction_pools",
+            root / "12_reconstruction_pools",
             cons_dir,
         )
         print(f"[12/13] Targeted consensus: {cons_dir}")
@@ -280,12 +280,12 @@ def cmd_run(args):
 
     candidate_assembly_enabled = bool(safe_get(config, ["candidate_assembly", "enabled"], False))
     if candidate_assembly_enabled:
-        ca_dir = ensure_dir(root / "11_candidate_assembly")
+        ca_dir = ensure_dir(root / "14_candidate_assembly")
         run_candidate_assembly(
             config,
             root,
-            root / "10_targeted_consensus",
-            root / "09_reconstruction_pools",
+            root / "13_targeted_consensus",
+            root / "12_reconstruction_pools",
             root / "05_refinement",
             ca_dir,
         )
@@ -321,33 +321,33 @@ def cmd_run(args):
         print(f"  {root / '09_variant_evidence' / 'gene_variant_evidence.tsv'}")
 
     if read_support_enabled:
-        print(f"  {root / '06_read_support' / 'problematic_stop_read_support.tsv'}")
-        print(f"  {root / '06_read_support' / 'problematic_stop_variants.tsv'}")
-        print(f"  {root / '06_read_support' / 'read_support_summary.md'}")
-        print(f"  {root / '06_read_support' / 'readset_consensus_recommendations.tsv'}")
-        print(f"  {root / '06_read_support' / 'readset_consensus_recommendations.md'}")
+        print(f"  {root / '10_read_support' / 'problematic_stop_read_support.tsv'}")
+        print(f"  {root / '10_read_support' / 'problematic_stop_variants.tsv'}")
+        print(f"  {root / '10_read_support' / 'read_support_summary.md'}")
+        print(f"  {root / '10_read_support' / 'readset_consensus_recommendations.tsv'}")
+        print(f"  {root / '10_read_support' / 'readset_consensus_recommendations.md'}")
 
     if targeted_enabled:
-        print(f"  {root / '08_targeted_extraction' / 'targets.bed'}")
-        print(f"  {root / '08_targeted_extraction' / 'targeted_read_extraction.tsv'}")
-        print(f"  {root / '08_targeted_extraction' / 'targeted_read_extraction.md'}")
+        print(f"  {root / '11_targeted_extraction' / 'targets.bed'}")
+        print(f"  {root / '11_targeted_extraction' / 'targeted_read_extraction.tsv'}")
+        print(f"  {root / '11_targeted_extraction' / 'targeted_read_extraction.md'}")
 
     if pools_enabled:
-        print(f"  {root / '09_reconstruction_pools' / 'reconstruction_pools.tsv'}")
-        print(f"  {root / '09_reconstruction_pools' / 'reconstruction_pools.md'}")
+        print(f"  {root / '12_reconstruction_pools' / 'reconstruction_pools.tsv'}")
+        print(f"  {root / '12_reconstruction_pools' / 'reconstruction_pools.md'}")
 
     if consensus_enabled:
-        print(f"  {root / '10_targeted_consensus' / 'targeted_consensus.tsv'}")
-        print(f"  {root / '10_targeted_consensus' / 'targeted_consensus.md'}")
-        print(f"  {root / '10_targeted_consensus' / 'best_missing_gene_candidates.tsv'}")
-        print(f"  {root / '10_targeted_consensus' / 'best_missing_gene_candidates.md'}")
-        print(f"  {root / '10_targeted_consensus' / 'cross_readset_missing_gene_candidates.tsv'}")
-        print(f"  {root / '10_targeted_consensus' / 'cross_readset_missing_gene_candidates.md'}")
+        print(f"  {root / '13_targeted_consensus' / 'targeted_consensus.tsv'}")
+        print(f"  {root / '13_targeted_consensus' / 'targeted_consensus.md'}")
+        print(f"  {root / '13_targeted_consensus' / 'best_missing_gene_candidates.tsv'}")
+        print(f"  {root / '13_targeted_consensus' / 'best_missing_gene_candidates.md'}")
+        print(f"  {root / '13_targeted_consensus' / 'cross_readset_missing_gene_candidates.tsv'}")
+        print(f"  {root / '13_targeted_consensus' / 'cross_readset_missing_gene_candidates.md'}")
 
     if candidate_assembly_enabled:
-        print(f"  {root / '11_candidate_assembly' / 'candidate_assembly_targets.tsv'}")
-        print(f"  {root / '11_candidate_assembly' / 'candidate_assembly_summary.tsv'}")
-        print(f"  {root / '11_candidate_assembly' / 'candidate_assembly_summary.md'}")
+        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_targets.tsv'}")
+        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_summary.tsv'}")
+        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_summary.md'}")
 
     print(f"  {qc_dir / 'gene_qc.tsv'}")
     print(f"  {qc_dir / 'problematic_features.tsv'}")

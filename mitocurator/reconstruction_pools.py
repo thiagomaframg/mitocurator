@@ -112,20 +112,20 @@ def run_reconstruction_pools(config, root: Path, read_support_dir: Path, targete
                 out_r2 = tdir / f"{target_id}.{read_set}.target_only_R2.fastq.gz"
                 if not (reuse and out_r1.exists() and out_r2.exists()):
                     _write_fastq_pe(out_r1, out_r2, t_r1, t_r2)
-                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "08_targeted_extraction", "output_fastq": ".", "output_fastq_r1": str(out_r1), "output_fastq_r2": str(out_r2), "output_format": "paired_fastq", "reads_or_pairs_written": min(len(t_r1), len(t_r2)), "singletons_written": abs(len(t_r1)-len(t_r2)), "downsampled": "no", "status": "ok", "comment": "from target extraction R1/R2" + ("; " + warn if warn else "")})
+                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "11_targeted_extraction", "output_fastq": ".", "output_fastq_r1": str(out_r1), "output_fastq_r2": str(out_r2), "output_format": "paired_fastq", "reads_or_pairs_written": min(len(t_r1), len(t_r2)), "singletons_written": abs(len(t_r1)-len(t_r2)), "downsampled": "no", "status": "ok", "comment": "from target extraction R1/R2" + ("; " + warn if warn else "")})
             elif fmt == "interleaved_fastq":
                 out_fq = tdir / f"{target_id}.{read_set}.target_only.interleaved.fastq.gz"
                 if not (reuse and out_fq.exists()):
                     _write_fastq(out_fq, t_single)
-                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "08_targeted_extraction", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "interleaved_fastq", "reads_or_pairs_written": len(t_single), "singletons_written": len(t_single), "downsampled": "no", "status": "ok", "comment": "from interleaved target extraction" + ("; " + warn if warn else "")})
+                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "11_targeted_extraction", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "interleaved_fastq", "reads_or_pairs_written": len(t_single), "singletons_written": len(t_single), "downsampled": "no", "status": "ok", "comment": "from interleaved target extraction" + ("; " + warn if warn else "")})
             else:
                 out_fq = tdir / f"{target_id}.{read_set}.target_only.fastq.gz"
                 if not (reuse and out_fq.exists()):
                     _write_fastq(out_fq, t_single)
-                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "08_targeted_extraction", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "single_fastq", "reads_or_pairs_written": len(t_single), "singletons_written": len(t_single), "downsampled": "no", "status": "ok", "comment": "from target extraction single" + ("; " + warn if warn else "")})
+                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "target_only", "input_sources": "11_targeted_extraction", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "single_fastq", "reads_or_pairs_written": len(t_single), "singletons_written": len(t_single), "downsampled": "no", "status": "ok", "comment": "from target extraction single" + ("; " + warn if warn else "")})
 
-        bam = read_support_dir / f"{read_set}_to_refined.bam"
-        bai = Path(str(bam) + ".bai")
+        bam = root / "08_read_mapping" / f"{read_set}.sorted.bam"
+        bai = Path(f"{bam}.bai")
         m_single, m_r1, m_r2, m_singletons = [], [], [], []
         down = "no"
         if (make_mito or make_combined) and bam.exists() and bai.exists():
@@ -174,12 +174,12 @@ def run_reconstruction_pools(config, root: Path, read_support_dir: Path, targete
                 out_r2 = tdir / f"{target_id}.{read_set}.mitogenome_mapped_R2.fastq.gz"
                 if not (reuse and out_r1.exists() and out_r2.exists()):
                     _write_fastq_pe(out_r1, out_r2, m_r1, m_r2)
-                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "mitogenome_mapped", "input_sources": "06_read_support BAM", "output_fastq": ".", "output_fastq_r1": str(out_r1), "output_fastq_r2": str(out_r2), "output_format": "paired_fastq", "reads_or_pairs_written": min(len(m_r1), len(m_r2)), "singletons_written": len(m_singletons), "downsampled": down, "status": "ok" if bam.exists() else "missing_bam", "comment": "mapped reads from whole mitogenome"})
+                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "mitogenome_mapped", "input_sources": "08_read_mapping BAM", "output_fastq": ".", "output_fastq_r1": str(out_r1), "output_fastq_r2": str(out_r2), "output_format": "paired_fastq", "reads_or_pairs_written": min(len(m_r1), len(m_r2)), "singletons_written": len(m_singletons), "downsampled": down, "status": "ok" if bam.exists() else "missing_bam", "comment": "mapped reads from whole mitogenome"})
             else:
                 out_fq = tdir / f"{target_id}.{read_set}.mitogenome_mapped.fastq.gz"
                 if not (reuse and out_fq.exists()):
                     _write_fastq(out_fq, m_single)
-                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "mitogenome_mapped", "input_sources": "06_read_support BAM", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "single_fastq", "reads_or_pairs_written": len(m_single), "singletons_written": len(m_single), "downsampled": down, "status": "ok" if bam.exists() else "missing_bam", "comment": "mapped reads from whole mitogenome"})
+                rows.append({"target_id": target_id, "target_type": r["target_type"], "gene": r["gene"], "read_set": read_set, "pool_type": "mitogenome_mapped", "input_sources": "08_read_mapping BAM", "output_fastq": str(out_fq), "output_fastq_r1": ".", "output_fastq_r2": ".", "output_format": "single_fastq", "reads_or_pairs_written": len(m_single), "singletons_written": len(m_single), "downsampled": down, "status": "ok" if bam.exists() else "missing_bam", "comment": "mapped reads from whole mitogenome"})
 
         if make_combined:
             if fmt == "paired_fastq":
