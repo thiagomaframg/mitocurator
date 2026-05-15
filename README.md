@@ -18,7 +18,7 @@ Fluxo atual: **FASTA-first** com anotação inicial via MitoFinder, seguida de r
 - `03_mitofinder/`
 - `05_refinement/`
 - `04_rotation/`
-- `06_read_support/`
+- `10_read_support/`
 - `07_gene_qc/`
 
 ## Arquivos em `05_refinement/`
@@ -116,7 +116,7 @@ python -m mitocurator.cli run --config config.teste.yaml
 - MitoFinder continua como dependência externa para anotação inicial.
 
 
-## Arquivos em `06_read_support/`
+## Arquivos em `10_read_support/`
 - `problematic_stop_read_support.tsv`
 - `problematic_stop_variants.tsv`
 - `read_support_summary.md`
@@ -131,7 +131,7 @@ python -m mitocurator.cli run --config config.teste.yaml
 
 A configuração aceita formato legado (`use_hifi`/`use_illumina`) e formato novo multi-read-set (`read_support.read_sets`).
 Não é necessário repetir caminhos dentro de `read_support`: use `source` para apontar para caminhos já definidos em `reads`.
-O `refined.gb` é usado automaticamente pelo pipeline e convertido para `06_read_support/refined.fa` quando necessário.
+O `refined.gb` é usado automaticamente pelo pipeline e convertido para `10_read_support/refined.fa` quando necessário.
 
 ### Exemplo recomendado (sem duplicar caminhos)
 ```yaml
@@ -176,7 +176,7 @@ Defina no início do YAML: `project.output_base_dir`, `project.output_prefix`, `
 - `refined.gb` é gerado internamente e não precisa ser informado manualmente.
 - Reads longas/curtas são declaradas uma única vez e reaproveitadas em `read_support.read_sets` via `source`.
 
-## Novos arquivos em `06_read_support/`
+## Novos arquivos em `10_read_support/`
 - `readset_consensus_recommendations.tsv`: consenso por stop entre múltiplos read sets.
 - `readset_consensus_recommendations.md`: relatório consolidado com conflitos e consenso.
 
@@ -196,14 +196,14 @@ read_support:
 - Se `reuse_existing_bam: true` e `{name}_to_refined.bam` + `.bai` já existirem, o pipeline reaproveita o BAM.
 - Se `force_remap: true`, o mapeamento é refeito mesmo com BAM existente.
 
-## Etapa `08_targeted_extraction/`
-Nova etapa opcional para extrair reads direcionadas por alvo (diagnóstico/curadoria), usando **BAMs já produzidos em `06_read_support/`** (sem remapear reads e sem corrigir GenBank automaticamente).
+## Etapa `11_targeted_extraction/`
+Nova etapa opcional para extrair reads direcionadas por alvo (diagnóstico/curadoria), usando **BAMs já produzidos em `10_read_support/`** (sem remapear reads e sem corrigir GenBank automaticamente).
 
 Arquivos:
-- `08_targeted_extraction/targets.bed`
-- `08_targeted_extraction/targeted_read_extraction.tsv`
-- `08_targeted_extraction/targeted_read_extraction.md`
-- `08_targeted_extraction/reads/*.fastq.gz`
+- `11_targeted_extraction/targets.bed`
+- `11_targeted_extraction/targeted_read_extraction.tsv`
+- `11_targeted_extraction/targeted_read_extraction.md`
+- `11_targeted_extraction/reads/*.fastq.gz`
 
 Para Illumina paired-end, a etapa exporta preferencialmente `*_R1.fastq.gz` e `*_R2.fastq.gz`; quando não há pareamento confiável suficiente, usa fallback `*.interleaved.fastq.gz` (registrado no TSV).
 
@@ -212,12 +212,12 @@ Tipos de alvo:
 - CDS problemáticas (`problematic_cds_stop_context.tsv`),
 - candidatos de correção por consenso (`readset_consensus_recommendations.tsv`).
 
-## Etapa `09_reconstruction_pools/`
+## Etapa `12_reconstruction_pools/`
 Etapa opcional para montar **pools de reads** por alvo para remontagem/refinamento posterior (sem executar montadores automaticamente).
 
 Entradas principais:
-- `08_targeted_extraction/targeted_read_extraction.tsv`
-- `06_read_support/{read_set}_to_refined.bam`
+- `11_targeted_extraction/targeted_read_extraction.tsv`
+- `08_read_mapping/{read_set}.sorted.bam`
 
 Pools gerados por alvo/read_set:
 1. `target_only` (reads do alvo já extraídas),
@@ -225,22 +225,22 @@ Pools gerados por alvo/read_set:
 3. `combined` (união deduplicada target_only + mitogenome_mapped).
 
 Saídas:
-- `09_reconstruction_pools/reconstruction_pools.tsv`
-- `09_reconstruction_pools/reconstruction_pools.md`
+- `12_reconstruction_pools/reconstruction_pools.tsv`
+- `12_reconstruction_pools/reconstruction_pools.md`
 
 > Nenhum montador é executado nesta etapa e nenhuma correção automática é aplicada ao GenBank.
 
-## Etapa `10_targeted_consensus/`
+## Etapa `13_targeted_consensus/`
 Etapa opcional para construir consenso local por alvo/read_set (por padrão usando `pool_type: combined`) para apoiar decisão curatorial.
 
 Saídas:
-- `10_targeted_consensus/targeted_consensus.tsv`
-- `10_targeted_consensus/targeted_consensus.md`
-- `10_targeted_consensus/consensus_fasta/*.consensus.fasta`
+- `13_targeted_consensus/targeted_consensus.tsv`
+- `13_targeted_consensus/targeted_consensus.md`
+- `13_targeted_consensus/consensus_fasta/*.consensus.fasta`
 
 Implementação atual (método `pileup`) usa maioria por posição com filtros de qualidade/profundidade e gera recomendações diagnósticas, sem alterar o GenBank.
-Também gera ranking em `10_targeted_consensus/best_missing_gene_candidates.tsv` e `.md` para priorizar candidatos de genes ausentes por gene/read_set.
-Além disso, gera ranking integrado entre tecnologias/read_sets em `10_targeted_consensus/cross_readset_missing_gene_candidates.tsv` e `.md`.
+Também gera ranking em `13_targeted_consensus/best_missing_gene_candidates.tsv` e `.md` para priorizar candidatos de genes ausentes por gene/read_set.
+Além disso, gera ranking integrado entre tecnologias/read_sets em `13_targeted_consensus/cross_readset_missing_gene_candidates.tsv` e `.md`.
 
 ### Rodando apenas targeted_consensus
 ```bash
@@ -273,7 +273,7 @@ Para cobertura muito alta:
 `consensus_backend: samtools` é o backend recomendado para alta cobertura; `pysam` permanece disponível para depuração.
 `LOW_DEPTH_CONSENSUS` deve aparecer apenas quando a profundidade observada é realmente insuficiente (ex.: média abaixo do limiar, mínimo ~zero, ou ausência de bases informativas).
 
-## Etapa `11_candidate_assembly/`
+## Etapa `14_candidate_assembly/`
 A montagem local de candidatos usa por padrão um pool controlado (`assembly_pool_strategy: targeted_plus_mitogenome`) por candidato/read_set:
 
 - até **85 reads target_only** (enriquecimento específico do gene candidato),

@@ -213,7 +213,7 @@ def run_targeted_consensus(config, root: Path, refinement_dir: Path, reconstruct
 
     rec, _ = read_record(root / "05_refinement" / "refined.gb")
     targets = {}
-    bed = root / "08_targeted_extraction" / "targets.bed"
+    bed = root / "11_targeted_extraction" / "targets.bed"
     if bed.exists():
         with open(bed, "r", encoding="utf-8") as f:
             next(f, None)

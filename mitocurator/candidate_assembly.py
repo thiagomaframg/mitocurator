@@ -392,7 +392,7 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
 
     rows = []
     target_rows = []
-    target_regions = _load_target_regions(root / "08_targeted_extraction")
+    target_regions = _load_target_regions(root / "11_targeted_extraction")
     for rr in cand.itertuples():
         gene = str(rr.gene)
         tid = str(rr.target_id)
@@ -420,7 +420,7 @@ def run_candidate_assembly(config, root: Path, consensus_dir: Path, pools_dir: P
             total_bases = 0
             n50 = 0
             if strategy == "mapped_mitogenome_plus_target":
-                bam = root / "06_read_support" / f"{rs}_to_refined.bam"
+                bam = root / "08_read_mapping" / f"{rs}.sorted.bam"
                 region = target_regions.get(tid)
                 seed_base = f"{ca.get('random_seed',42)}|{gene}|{tid}|{rs}"
                 mrows = _select_read_ids_from_bam(bam, None, mito_req, int(ca.get('min_mapping_quality',20)), seed_base+"|mitogenome_mapped", "mitogenome_mapped")

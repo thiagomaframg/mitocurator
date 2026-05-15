@@ -125,13 +125,14 @@ def run_targeted_extraction(config, root: Path, refinement_dir: Path, read_suppo
             bed.write(f"{t['seqid']}\t{s0}\t{e0}\t{t['target_id']}\t{t['target_type']}\t{t['gene']}\t{t['comment']}\n")
 
     rows = []
+    read_mapping_dir = root / "08_read_mapping"
     read_sets = resolve_read_sets(config)
     for rs in read_sets:
-        bam = read_support_dir / f"{rs['name']}_to_refined.bam"
+        bam = read_mapping_dir / f"{rs['name']}.sorted.bam"
         bai = Path(f"{bam}.bai")
         if not (bam.exists() and bai.exists()):
             for t in targets:
-                rows.append({"target_id": t["target_id"], "target_type": t["target_type"], "gene": t["gene"], "seqid": t["seqid"], "start": t["start1"], "end": t["end1"], "flank_bp": t["flank_bp"], "read_set": rs["name"], "bam": str(bam), "reads_extracted": 0, "output_fastq": ".", "output_fastq_r1": ".", "output_fastq_r2": ".", "paired_reads_written": 0, "singletons_written": 0, "output_format": ".", "status": "missing_bam", "comment": "BAM/BAI not found in 06_read_support"})
+                rows.append({"target_id": t["target_id"], "target_type": t["target_type"], "gene": t["gene"], "seqid": t["seqid"], "start": t["start1"], "end": t["end1"], "flank_bp": t["flank_bp"], "read_set": rs["name"], "bam": str(bam), "reads_extracted": 0, "output_fastq": ".", "output_fastq_r1": ".", "output_fastq_r2": ".", "paired_reads_written": 0, "singletons_written": 0, "output_format": ".", "status": "missing_bam", "comment": "BAM/BAI not found in 08_read_mapping"})
             continue
         aln = pysam.AlignmentFile(str(bam), "rb")
         for t in targets:
