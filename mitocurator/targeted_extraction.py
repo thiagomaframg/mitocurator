@@ -144,7 +144,8 @@ def run_targeted_extraction(config, root: Path, refinement_dir: Path, read_suppo
             out_r1 = reads_dir / f"{t['target_id']}.{rs['name']}_R1.fastq.gz"
             out_r2 = reads_dir / f"{t['target_id']}.{rs['name']}_R2.fastq.gz"
             if reuse_outputs and out_fastq.exists():
-                rows.append({"target_id": t["target_id"], "target_type": t["target_type"], "gene": t["gene"], "seqid": t["seqid"], "start": t["start1"], "end": t["end1"], "flank_bp": t["flank_bp"], "read_set": rs["name"], "bam": str(bam), "reads_extracted": -1, "output_fastq": str(out_fastq), "output_fastq_r1": ".", "output_fastq_r2": ".", "paired_reads_written": 0, "singletons_written": 0, "output_format": "interleaved_fastq", "status": "reused", "comment": "existing output reused"})
+                reused_format = "interleaved_fastq" if is_pe else "single_fastq"
+                rows.append({"target_id": t["target_id"], "target_type": t["target_type"], "gene": t["gene"], "seqid": t["seqid"], "start": t["start1"], "end": t["end1"], "flank_bp": t["flank_bp"], "read_set": rs["name"], "bam": str(bam), "reads_extracted": -1, "output_fastq": str(out_fastq), "output_fastq_r1": ".", "output_fastq_r2": ".", "paired_reads_written": 0, "singletons_written": -1, "output_format": reused_format, "status": "reused", "comment": "existing output reused"})
                 continue
             if reuse_outputs and is_pe and out_r1.exists() and out_r2.exists():
                 rows.append({"target_id": t["target_id"], "target_type": t["target_type"], "gene": t["gene"], "seqid": t["seqid"], "start": t["start1"], "end": t["end1"], "flank_bp": t["flank_bp"], "read_set": rs["name"], "bam": str(bam), "reads_extracted": -1, "output_fastq": f"{out_r1},{out_r2}", "output_fastq_r1": str(out_r1), "output_fastq_r2": str(out_r2), "paired_reads_written": -1, "singletons_written": -1, "output_format": "paired_fastq", "status": "reused", "comment": "existing paired outputs reused"})
