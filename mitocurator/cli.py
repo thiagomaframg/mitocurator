@@ -12,6 +12,7 @@ from .read_support import run_read_support
 from .read_mapping import run_read_mapping
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
+from .applied_curation import run_applied_curation
 from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
@@ -159,6 +160,19 @@ def cmd_integrated_report(args):
     print(f"  {outdir / 'integrated_curation_report.html'}")
     print(f"  {outdir / 'integrated_gene_decisions.tsv'}")
     print(f"  {outdir / 'evidence_index.tsv'}")
+
+
+def cmd_apply_curation(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_applied_curation(config, root, ensure_dir(root / "15_applied_curation"))
+    print(f"Applied curation written to: {outdir}")
+    print(f"  {outdir / 'curated_mitogenome.gb'}")
+    print(f"  {outdir / 'curated_mitogenome.fasta'}")
+    print(f"  {outdir / 'applied_edits.tsv'}")
+    print(f"  {outdir / 'feature_coordinate_liftover.tsv'}")
+    print(f"  {outdir / 'post_curation_cds_validation.tsv'}")
+    print(f"  {outdir / 'applied_curation_report.md'}")
 
 
 def cmd_annotation_assessment(args):
@@ -426,6 +440,10 @@ def build_parser():
     p_ir = sub.add_parser("integrated-report", help="Generate final integrated curation report")
     p_ir.add_argument("--config", required=True)
     p_ir.set_defaults(func=cmd_integrated_report)
+
+    p_ac = sub.add_parser("apply-curation", help="Apply evidence-backed curation edits and lift feature coordinates")
+    p_ac.add_argument("--config", required=True)
+    p_ac.set_defaults(func=cmd_apply_curation)
 
     p_aa = sub.add_parser("annotation-assessment", help="Regenerate annotation assessment report from existing diagnosis/refinement outputs")
     p_aa.add_argument("--config", required=True)
