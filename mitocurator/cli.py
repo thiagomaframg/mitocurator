@@ -11,6 +11,7 @@ from .mitofinder_runner import run_mitofinder_for_fasta
 from .read_support import run_read_support
 from .read_mapping import run_read_mapping
 from .variant_evidence import run_variant_evidence
+from .integrated_report import run_integrated_report
 from .targeted_extraction import run_targeted_extraction
 from .reconstruction_pools import run_reconstruction_pools
 from .targeted_consensus import run_targeted_consensus
@@ -149,6 +150,17 @@ def cmd_candidate_assembly(args):
     print(f"Candidate assembly written to: {ca_dir}")
 
 
+def cmd_integrated_report(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_integrated_report(config, root, ensure_dir(root / "15_integrated_report"))
+    print(f"Integrated report written to: {outdir}")
+    print(f"  {outdir / 'integrated_curation_report.md'}")
+    print(f"  {outdir / 'integrated_curation_report.html'}")
+    print(f"  {outdir / 'integrated_gene_decisions.tsv'}")
+    print(f"  {outdir / 'evidence_index.tsv'}")
+
+
 def cmd_annotation_assessment(args):
     config = load_config(args.config)
     root = outdir_from_config(config)
@@ -167,7 +179,7 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/13] Tool check: {tc}")
+    print(f"[1/14] Tool check: {tc}")
 
     current_input = config["input"]["mitogenome"]
     fmt = infer_format(current_input)
@@ -176,11 +188,11 @@ def cmd_run(args):
         mf_dir = ensure_dir(root / "03_mitofinder")
         annotated_gb = run_mitofinder_for_fasta(config, current_input, mf_dir)
         config["input"]["mitogenome"] = str(annotated_gb)
-        print(f"[2/13] MitoFinder annotation: {annotated_gb}")
+        print(f"[2/14] MitoFinder annotation: {annotated_gb}")
     else:
         annotated_gb = current_input
         config["input"]["mitogenome"] = str(annotated_gb)
-        print("[2/13] MitoFinder annotation: skipped (input already annotated GenBank)")
+        print("[2/14] MitoFinder annotation: skipped (input already annotated GenBank)")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
@@ -189,52 +201,52 @@ def cmd_run(args):
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
         config["input"]["mitogenome"] = str(refined_gb)
-        print(f"[3/13] Annotation refinement: {refined_gb}")
+        print(f"[3/14] Annotation refinement: {refined_gb}")
     else:
-        print("[3/13] Annotation refinement: disabled")
+        print("[3/14] Annotation refinement: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(refined_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
         config["input"]["mitogenome"] = str(rotated_input)
-        print(f"[4/13] Rotation: {rotated_input}")
+        print(f"[4/14] Rotation: {rotated_input}")
     except Exception as e:
-        print(f"[4/13] Rotation skipped/failed: {e}")
+        print(f"[4/14] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for downstream steps.")
         config["input"]["mitogenome"] = str(refined_gb)
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[5/13] Diagnosis and annotation assessment inputs: {qc_dir}")
+    print(f"[5/14] Diagnosis and annotation assessment inputs: {qc_dir}")
 
     assessment_md, assessment_tsv = generate_annotation_assessment_report(root)
-    print(f"[6/13] Annotation assessment report: {assessment_md}")
+    print(f"[6/14] Annotation assessment report: {assessment_md}")
     print(f"       Annotation evidence summary: {assessment_tsv}")
 
     read_mapping_enabled = bool(safe_get(config, ["read_mapping", "enabled"], True))
     if read_mapping_enabled:
         rm_dir = run_read_mapping(config, root, ensure_dir(root / "08_read_mapping"))
-        print(f"[7/13] Read mapping: {rm_dir}")
+        print(f"[7/14] Read mapping: {rm_dir}")
     else:
-        print("[7/13] Read mapping: disabled")
+        print("[7/14] Read mapping: disabled")
 
     variant_evidence_enabled = bool(
         safe_get(config, ["variant_evidence", "enabled"], read_mapping_enabled)
     )
     if variant_evidence_enabled:
         ve_dir = run_variant_evidence(config, root, ensure_dir(root / "09_variant_evidence"))
-        print(f"[8/13] Variant evidence: {ve_dir}")
+        print(f"[8/14] Variant evidence: {ve_dir}")
     else:
-        print("[8/13] Variant evidence: disabled")
+        print("[8/14] Variant evidence: disabled")
 
     read_support_enabled = bool(safe_get(config, ["read_support", "enabled"], False))
     if read_support_enabled:
         rs_dir = ensure_dir(root / "10_read_support")
         run_read_support(config, Path(refined_gb), root / "05_refinement", rs_dir)
-        print(f"[9/13] Read support: {rs_dir}")
+        print(f"[9/14] Read support: {rs_dir}")
     else:
-        print("[9/13] Read support: disabled")
+        print("[9/14] Read support: disabled")
 
     targeted_enabled = bool(safe_get(config, ["targeted_extraction", "enabled"], False))
     if targeted_enabled:
@@ -246,9 +258,9 @@ def cmd_run(args):
             root / "10_read_support",
             te_dir,
         )
-        print(f"[10/13] Targeted extraction: {te_dir}")
+        print(f"[10/14] Targeted extraction: {te_dir}")
     else:
-        print("[10/13] Targeted extraction: disabled")
+        print("[10/14] Targeted extraction: disabled")
 
     pools_enabled = bool(safe_get(config, ["reconstruction_pools", "enabled"], False))
     if pools_enabled:
@@ -260,9 +272,9 @@ def cmd_run(args):
             root / "11_targeted_extraction",
             pools_dir,
         )
-        print(f"[11/13] Reconstruction pools: {pools_dir}")
+        print(f"[11/14] Reconstruction pools: {pools_dir}")
     else:
-        print("[11/13] Reconstruction pools: disabled")
+        print("[11/14] Reconstruction pools: disabled")
 
     consensus_enabled = bool(safe_get(config, ["targeted_consensus", "enabled"], False))
     if consensus_enabled:
@@ -274,9 +286,9 @@ def cmd_run(args):
             root / "12_reconstruction_pools",
             cons_dir,
         )
-        print(f"[12/13] Targeted consensus: {cons_dir}")
+        print(f"[12/14] Targeted consensus: {cons_dir}")
     else:
-        print("[12/13] Targeted consensus: disabled")
+        print("[12/14] Targeted consensus: disabled")
 
     candidate_assembly_enabled = bool(safe_get(config, ["candidate_assembly", "enabled"], False))
     if candidate_assembly_enabled:
@@ -289,9 +301,16 @@ def cmd_run(args):
             root / "05_refinement",
             ca_dir,
         )
-        print(f"[13/13] Candidate assembly: {ca_dir}")
+        print(f"[13/14] Candidate assembly: {ca_dir}")
     else:
-        print("[13/13] Candidate assembly: disabled")
+        print("[13/14] Candidate assembly: disabled")
+
+    integrated_report_enabled = bool(safe_get(config, ["integrated_report", "enabled"], True))
+    if integrated_report_enabled:
+        ir_dir = run_integrated_report(config, root, ensure_dir(root / "15_integrated_report"))
+        print(f"[14/14] Integrated report: {ir_dir}")
+    else:
+        print("[14/14] Integrated report: disabled")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
@@ -403,6 +422,10 @@ def build_parser():
     p_ca = sub.add_parser("candidate-assembly", help="Run only the candidate-assembly stage")
     p_ca.add_argument("--config", required=True)
     p_ca.set_defaults(func=cmd_candidate_assembly)
+
+    p_ir = sub.add_parser("integrated-report", help="Generate final integrated curation report")
+    p_ir.add_argument("--config", required=True)
+    p_ir.set_defaults(func=cmd_integrated_report)
 
     p_aa = sub.add_parser("annotation-assessment", help="Regenerate annotation assessment report from existing diagnosis/refinement outputs")
     p_aa.add_argument("--config", required=True)
