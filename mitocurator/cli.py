@@ -12,6 +12,7 @@ from .read_support import run_read_support
 from .read_mapping import run_read_mapping
 from .missing_gene_discovery import run_missing_gene_discovery
 from .missing_gene_read_search import run_missing_gene_read_search
+from .missing_gene_recovery import run_missing_gene_recovery
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
 from .applied_curation import run_applied_curation
@@ -107,6 +108,18 @@ def cmd_missing_gene_read_search(args):
     print(f"  {outdir / 'missing_gene_candidate_read_support.tsv'}")
     print(f"  {outdir / 'missing_gene_candidate_read_support_summary.tsv'}")
     print(f"  {outdir / 'missing_gene_read_search_report.md'}")
+
+
+def cmd_missing_gene_recovery(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_missing_gene_recovery(config, root, ensure_dir(root / "09_missing_gene_recovery"))
+    print(f"Missing-gene recovery written to: {outdir}")
+    print(f"  {outdir / 'missing_reference_genes.fasta'}")
+    print(f"  {outdir / 'missing_gene_read_hits.tsv'}")
+    print(f"  {outdir / 'mitogenome_read_hits.tsv'}")
+    print(f"  {outdir / 'selected_read_pool.tsv'}")
+    print(f"  {outdir / 'missing_gene_recovery_report.md'}")
 
 
 def cmd_variant_evidence(args):
@@ -449,6 +462,10 @@ def build_parser():
     p_mgrs = sub.add_parser("missing-gene-read-search", help="Summarize read support for provisional missing-gene candidates")
     p_mgrs.add_argument("--config", required=True)
     p_mgrs.set_defaults(func=cmd_missing_gene_read_search)
+
+    p_mgr = sub.add_parser("missing-gene-recovery", help="Recover missing genes by searching reference genes in long reads and preparing local assembly pools")
+    p_mgr.add_argument("--config", required=True)
+    p_mgr.set_defaults(func=cmd_missing_gene_recovery)
 
     p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
     p_ve.add_argument("--config", required=True)
