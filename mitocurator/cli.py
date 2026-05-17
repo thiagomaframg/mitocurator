@@ -10,6 +10,7 @@ from .io import infer_format
 from .mitofinder_runner import run_mitofinder_for_fasta
 from .read_support import run_read_support
 from .read_mapping import run_read_mapping
+from .missing_gene_discovery import run_missing_gene_discovery
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
 from .applied_curation import run_applied_curation
@@ -83,6 +84,18 @@ def cmd_read_mapping(args):
     print(f"  {outdir / 'mapping_summary.tsv'}")
     print(f"  {outdir / 'coverage_by_position.tsv'}")
     print(f"  {outdir / 'coverage_by_gene.tsv'}")
+
+
+def cmd_missing_gene_discovery(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_missing_gene_discovery(config, root, ensure_dir(root / "08_missing_gene_discovery"))
+    print(f"Missing-gene discovery written to: {outdir}")
+    print(f"  {outdir / 'missing_gene_candidates_pre_mapping.tsv'}")
+    print(f"  {outdir / 'missing_gene_candidate_regions.bed'}")
+    print(f"  {outdir / 'missing_gene_candidate_features.gb'}")
+    print(f"  {outdir / 'missing_gene_candidate_features.fasta'}")
+    print(f"  {outdir / 'missing_gene_discovery_report.md'}")
 
 
 def cmd_variant_evidence(args):
@@ -417,6 +430,10 @@ def build_parser():
     p_rm = sub.add_parser("read-mapping", help="Map reads to the current mitogenome and summarize coverage")
     p_rm.add_argument("--config", required=True)
     p_rm.set_defaults(func=cmd_read_mapping)
+
+    p_mgd = sub.add_parser("missing-gene-discovery", help="Discover provisional missing-gene candidates before read mapping")
+    p_mgd.add_argument("--config", required=True)
+    p_mgd.set_defaults(func=cmd_missing_gene_discovery)
 
     p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
     p_ve.add_argument("--config", required=True)
