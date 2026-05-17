@@ -445,6 +445,214 @@ def _validate_curated_cds(record: SeqRecord, genetic_code: int) -> List[Dict[str
     return rows
 
 
+def _candidate_id_from_target_id(target_id: str, gene: str) -> str:
+    """Convert target IDs such as missing_ND2_ND2_cand20 to ND2_cand20."""
+    target_id = str(target_id or "")
+    gene = str(gene or "")
+    prefix = f"missing_{gene}_"
+    if target_id.startswith(prefix):
+        return target_id[len(prefix):]
+    return target_id
+
+
+def _load_missing_candidate_by_id(root: Path) -> Dict[tuple[str, str], Dict[str, str]]:
+    rows = _read_tsv(root / "05_refinement" / "missing_gene_candidates.tsv")
+    out: Dict[tuple[str, str], Dict[str, str]] = {}
+
+    for row in rows:
+        gene = str(row.get("gene", "") or "")
+        candidate_id = str(row.get("candidate_id", "") or "")
+        if gene and candidate_id:
+            out[(gene, candidate_id)] = row
+
+    return out
+
+
+def _collect_missing_gene_annotation_edits(
+    config: dict,
+    root: Path,
+    curated_record: SeqRecord,
+    edits: List[SequenceEdit],
+    genetic_code: int,
+) -> tuple[list[SeqFeature], list[Dict[str, Any]]]:
+    """Create gene/CDS features for supported missing-gene candidates.
+
+    This phase intentionally precedes interpretation of remaining problematic
+    CDSs. It does not change the sequence; it applies annotation-level curation
+    based on targeted-consensus evidence.
+    """
+    cross_rows = _read_tsv(root / "13_targeted_consensus" / "cross_readset_missing_gene_candidates.tsv")
+    best_rows = _read_tsv(root / "13_targeted_consensus" / "best_missing_gene_candidates.tsv")
+    candidate_by_id = _load_missing_candidate_by_id(root)
+
+    min_supporting = int(
+        safe_get(config, ["applied_curation", "min_supporting_readsets"], 1)
+    )
+
+    # Prefer cross-readset consensus. If absent, fall back to best per-readset
+    # consensus, which allows single-readset projects to apply supported missing
+    # gene annotations.
+    selected: Dict[str, Dict[str, str]] = {}
+
+    for row in sorted(cross_rows, key=lambda r: int(float(r.get("combined_rank", "999999") or 999999))):
+        gene = str(row.get("gene", "") or "")
+        rec = str(row.get("combined_recommendation", "") or "")
+        n_read_sets = int(float(row.get("n_read_sets", "0") or 0))
+        if not gene or gene in selected:
+            continue
+        if "GENE_CANDIDATE_SUPPORTED" not in rec:
+            continue
+        if n_read_sets < min_supporting:
+            continue
+        selected[gene] = row
+
+    if not selected:
+        for row in sorted(best_rows, key=lambda r: int(float(r.get("rank", "999999") or 999999))):
+            gene = str(row.get("gene", "") or "")
+            rec = str(row.get("recommendation", "") or "")
+            if not gene or gene in selected:
+                continue
+            if "GENE_CANDIDATE_SUPPORTED" not in rec and "PARTIAL_GENE_CANDIDATE_SUPPORTED" not in rec:
+                continue
+            selected[gene] = row
+
+    # Avoid duplicating features already present in the curated record.
+    existing_genes = set()
+    for feature in curated_record.features:
+        if feature.type in {"gene", "CDS", "tRNA", "rRNA"}:
+            existing_genes.add(_feature_name(feature))
+
+    added_features: list[SeqFeature] = []
+    rows: list[Dict[str, Any]] = []
+
+    for gene, row in selected.items():
+        if gene in existing_genes:
+            rows.append({
+                "gene": gene,
+                "target_id": row.get("target_id", "."),
+                "candidate_id": ".",
+                "edit_type": "ADD_MISSING_GENE_FEATURES",
+                "applied": "no",
+                "status": "skipped_gene_already_present",
+                "old_start": ".",
+                "old_end": ".",
+                "new_start": ".",
+                "new_end": ".",
+                "strand": ".",
+                "n_read_sets": row.get("n_read_sets", row.get("read_set", ".")),
+                "recommendation": row.get("combined_recommendation", row.get("recommendation", ".")),
+                "comment": "Feature with this gene name already exists in curated record.",
+            })
+            continue
+
+        target_id = str(row.get("target_id", "") or "")
+        candidate_id = _candidate_id_from_target_id(target_id, gene)
+        cand = candidate_by_id.get((gene, candidate_id))
+
+        if cand is None:
+            rows.append({
+                "gene": gene,
+                "target_id": target_id,
+                "candidate_id": candidate_id,
+                "edit_type": "ADD_MISSING_GENE_FEATURES",
+                "applied": "no",
+                "status": "skipped_candidate_coordinates_not_found",
+                "old_start": ".",
+                "old_end": ".",
+                "new_start": ".",
+                "new_end": ".",
+                "strand": ".",
+                "n_read_sets": row.get("n_read_sets", row.get("read_set", ".")),
+                "recommendation": row.get("combined_recommendation", row.get("recommendation", ".")),
+                "comment": "Candidate not found in 05_refinement/missing_gene_candidates.tsv.",
+            })
+            continue
+
+        try:
+            old_start = int(cand["start"])
+            old_end = int(cand["end"])
+        except Exception:
+            rows.append({
+                "gene": gene,
+                "target_id": target_id,
+                "candidate_id": candidate_id,
+                "edit_type": "ADD_MISSING_GENE_FEATURES",
+                "applied": "no",
+                "status": "skipped_invalid_candidate_coordinates",
+                "old_start": cand.get("start", "."),
+                "old_end": cand.get("end", "."),
+                "new_start": ".",
+                "new_end": ".",
+                "strand": cand.get("strand", "."),
+                "n_read_sets": row.get("n_read_sets", row.get("read_set", ".")),
+                "recommendation": row.get("combined_recommendation", row.get("recommendation", ".")),
+                "comment": "Invalid candidate coordinates.",
+            })
+            continue
+
+        cand_strand_raw = str(cand.get("strand", "+") or "+")
+        strand = -1 if cand_strand_raw in {"-", "-1"} else 1
+
+        # Candidate coordinates are in the original sequence coordinate system.
+        # Lift them after sequence edits so added features stay consistent with
+        # curated sequence coordinates.
+        new_start0 = _lift_boundary(old_start - 1, edits, is_end=False)
+        new_end0 = _lift_boundary(old_end, edits, is_end=True)
+
+        if new_end0 < new_start0:
+            new_end0 = new_start0
+
+        loc = FeatureLocation(new_start0, new_end0, strand=strand)
+
+        note = (
+            "MitoCurator: missing gene feature added from targeted-consensus "
+            "supported candidate."
+        )
+
+        gene_feature = SeqFeature(
+            location=loc,
+            type="gene",
+            qualifiers={
+                "gene": [gene],
+                "note": [note],
+            },
+        )
+
+        cds_feature = SeqFeature(
+            location=loc,
+            type="CDS",
+            qualifiers={
+                "gene": [gene],
+                "product": [f"{gene} protein"],
+                "transl_table": [str(genetic_code)],
+                "note": [note],
+            },
+        )
+
+        cds_feature = _update_cds_translation(cds_feature, curated_record, genetic_code)
+
+        added_features.extend([gene_feature, cds_feature])
+
+        rows.append({
+            "gene": gene,
+            "target_id": target_id,
+            "candidate_id": candidate_id,
+            "edit_type": "ADD_MISSING_GENE_FEATURES",
+            "applied": "yes",
+            "status": "applied",
+            "old_start": old_start,
+            "old_end": old_end,
+            "new_start": new_start0 + 1,
+            "new_end": new_end0,
+            "strand": strand,
+            "n_read_sets": row.get("n_read_sets", row.get("read_set", ".")),
+            "recommendation": row.get("combined_recommendation", row.get("recommendation", ".")),
+            "comment": "Added gene and CDS features for supported missing-gene candidate.",
+        })
+
+    return added_features, rows
+
+
 def _write_report(
     path: Path,
     edits: List[SequenceEdit],
@@ -525,9 +733,41 @@ def run_applied_curation(config: dict, root: Path, outdir: Path | None = None) -
     )
     curated_record.features = lifted_features
 
+    annotation_features, annotation_edit_rows = _collect_missing_gene_annotation_edits(
+        config,
+        root,
+        curated_record,
+        valid_edits,
+        genetic_code,
+    )
+    if annotation_features:
+        curated_record.features.extend(annotation_features)
+        curated_record.features.sort(key=lambda f: int(f.location.start))
+
     # Preserve molecule_type for GenBank writing.
     curated_record.annotations = deepcopy(original_record.annotations)
     curated_record.annotations.setdefault("molecule_type", "DNA")
+
+    _write_tsv(
+        outdir / "applied_annotation_edits.tsv",
+        annotation_edit_rows,
+        [
+            "gene",
+            "target_id",
+            "candidate_id",
+            "edit_type",
+            "applied",
+            "status",
+            "old_start",
+            "old_end",
+            "new_start",
+            "new_end",
+            "strand",
+            "n_read_sets",
+            "recommendation",
+            "comment",
+        ],
+    )
 
     edit_rows = []
     for e in raw_edits:

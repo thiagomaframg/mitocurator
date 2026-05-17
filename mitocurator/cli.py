@@ -169,6 +169,7 @@ def cmd_apply_curation(args):
     print(f"Applied curation written to: {outdir}")
     print(f"  {outdir / 'curated_mitogenome.gb'}")
     print(f"  {outdir / 'curated_mitogenome.fasta'}")
+    print(f"  {outdir / 'applied_annotation_edits.tsv'}")
     print(f"  {outdir / 'applied_edits.tsv'}")
     print(f"  {outdir / 'feature_coordinate_liftover.tsv'}")
     print(f"  {outdir / 'post_curation_cds_validation.tsv'}")
