@@ -14,6 +14,7 @@ from .missing_gene_discovery import run_missing_gene_discovery
 from .missing_gene_read_search import run_missing_gene_read_search
 from .missing_gene_recovery import run_missing_gene_recovery
 from .missing_gene_assembly_assessment import run_missing_gene_assembly_assessment
+from .recovered_contig_annotation import run_recovered_contig_annotation
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
 from .applied_curation import run_applied_curation
@@ -133,6 +134,18 @@ def cmd_missing_gene_assembly_assessment(args):
     print(f"  {outdir / 'selected_recovery_contig.tsv'}")
     print(f"  {outdir / 'selected_recovery_contig.fasta'}")
     print(f"  {outdir / 'missing_gene_assembly_assessment_report.md'}")
+
+
+def cmd_recovered_contig_annotation(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_recovered_contig_annotation(config, root, ensure_dir(root / "11_recovered_contig_annotation"))
+    print(f"Recovered contig annotation written to: {outdir}")
+    print(f"  {outdir / 'run_mitofinder_recovered_contig.sh'}")
+    print(f"  {outdir / 'recovered_contig_annotation_summary.tsv'}")
+    print(f"  {outdir / 'recovered_contig_annotation_inventory.tsv'}")
+    print(f"  {outdir / 'recovered_contig_cds_validation.tsv'}")
+    print(f"  {outdir / 'recovered_contig_annotation_report.md'}")
 
 
 def cmd_variant_evidence(args):
@@ -483,6 +496,10 @@ def build_parser():
     p_mgaa = sub.add_parser("missing-gene-assembly-assessment", help="Assess local recovery assemblies for missing genes")
     p_mgaa.add_argument("--config", required=True)
     p_mgaa.set_defaults(func=cmd_missing_gene_assembly_assessment)
+
+    p_rca = sub.add_parser("recovered-contig-annotation", help="Annotate and validate the selected missing-gene recovery contig")
+    p_rca.add_argument("--config", required=True)
+    p_rca.set_defaults(func=cmd_recovered_contig_annotation)
 
     p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
     p_ve.add_argument("--config", required=True)
