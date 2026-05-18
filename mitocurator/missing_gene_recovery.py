@@ -237,21 +237,21 @@ def _parse_paf(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+
+
 def _select_mitogenome_read_ids_for_target_coverage(
     paf_rows: List[Dict[str, Any]],
     min_mapq: int,
     min_identity: float,
     min_alignment_length: int,
-    target_query_bases: int,
-    min_reads: int,
-    rng: random.Random,
-) -> Set[str]:
-    """Select mitogenome reads for a controlled local assembly pool.
+    target_mitogenome_coverage: float,
+    mitogenome_length: int,
+) -> tuple[Set[str], int, int, float]:
+    """Select high-confidence mitogenome-like reads up to a target coverage.
 
-    The M. capixaba manual workflow used a practical pool size, not a
-    requirement that every read spans a large fraction of the mitogenome.
-    Therefore, this selector accumulates full read bases and also enforces
-    a minimum number of mitogenome-like reads.
+    The number of selected reads is not fixed. It is estimated from the target
+    coverage, mitogenome length, and the mean length of reads passing the strong
+    mitogenome filters.
     """
     best_by_read: Dict[str, Dict[str, Any]] = {}
 
@@ -269,10 +269,6 @@ def _select_mitogenome_read_ids_for_target_coverage(
             best_by_read[rid] = row
 
     rows = list(best_by_read.values())
-
-    # Prefer longer/better alignments, but shuffle within the candidate set to
-    # avoid always taking one local overrepresented molecule first.
-    rng.shuffle(rows)
     rows.sort(
         key=lambda r: (
             int(r["alignment_length"]),
@@ -282,22 +278,18 @@ def _select_mitogenome_read_ids_for_target_coverage(
         reverse=True,
     )
 
-    selected: Set[str] = set()
-    query_bases = 0
+    if not rows:
+        return set(), 0, 0, 0.0
 
-    for row in rows:
-        rid = str(row["read_id"])
-        if rid in selected:
-            continue
+    mean_passing_read_length = sum(int(r["query_length"]) for r in rows) / len(rows)
+    target_bases = int(round(target_mitogenome_coverage * mitogenome_length))
+    estimated_target_reads = int(round(target_bases / mean_passing_read_length)) if mean_passing_read_length else len(rows)
+    estimated_target_reads = max(1, estimated_target_reads)
 
-        selected.add(rid)
-        query_bases += int(row["query_length"])
+    selected_rows = rows[:estimated_target_reads]
+    selected_ids = {str(row["read_id"]) for row in selected_rows}
 
-        if len(selected) >= min_reads and query_bases >= target_query_bases:
-            break
-
-    return selected
-
+    return selected_ids, len(rows), estimated_target_reads, mean_passing_read_length
 
 def _select_gene_read_ids_from_paf(
     paf_rows: List[Dict[str, Any]],
@@ -309,7 +301,7 @@ def _select_gene_read_ids_from_paf(
 
     The length threshold is dynamic. For the M. capixaba ND2 case, the manual
     cutoff of ~700 nt corresponds to ~70% of the 982 nt ND2 reference. The same
-    fraction is now used for any missing CDS.
+    fraction is used for any missing CDS.
     """
     keep = set()
 
@@ -328,7 +320,6 @@ def _select_gene_read_ids_from_paf(
         keep.add(str(row["read_id"]))
 
     return keep
-
 
 def _long_readsets(config: dict) -> List[Dict[str, Any]]:
     out = []
@@ -375,7 +366,7 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
     # Mitogenome-like reads used as the backbone local assembly pool.
     mito_min_identity = float(safe_get(config, ["missing_gene_recovery", "mito_min_identity"], 70))
     mito_min_alignment_length = int(
-        safe_get(config, ["missing_gene_recovery", "mito_min_alignment_length"], 1000)
+        safe_get(config, ["missing_gene_recovery", "mito_min_alignment_length"], 10000)
     )
     mito_min_reads = int(safe_get(config, ["missing_gene_recovery", "mito_min_reads"], 300))
     seed = int(safe_get(config, ["missing_gene_recovery", "random_seed"], 42))
@@ -419,15 +410,15 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             min_identity=gene_min_identity,
             min_target_aligned_fraction=gene_min_target_aligned_fraction,
         )
-        target_query_bases = int(target_cov * mito_len)
-        mito_ids_all = _select_mitogenome_read_ids_for_target_coverage(
-            mito_paf_rows,
-            min_mapq=min_mapq,
-            min_identity=mito_min_identity,
-            min_alignment_length=mito_min_alignment_length,
-            target_query_bases=target_query_bases,
-            min_reads=mito_min_reads,
-            rng=rng,
+        mito_ids_all, mito_ids_passing_filters, estimated_target_mito_reads, mean_passing_mito_read_len = (
+            _select_mitogenome_read_ids_for_target_coverage(
+                mito_paf_rows,
+                min_mapq=min_mapq,
+                min_identity=mito_min_identity,
+                min_alignment_length=mito_min_alignment_length,
+                target_mitogenome_coverage=target_cov,
+                mitogenome_length=mito_len,
+            )
         )
 
         n_reads, n_bases = _fastq_stats(rs["reads"])
@@ -457,8 +448,10 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "mitogenome_length": mito_len,
             "target_mitogenome_coverage": target_cov,
             "mean_read_length": round(mean_read_len, 3),
-            "mitogenome_read_ids_before_subsampling": ".",
+            "mitogenome_read_ids_passing_filters": mito_ids_passing_filters,
+            "estimated_mitogenome_target_reads_for_coverage": estimated_target_mito_reads,
             "mitogenome_read_ids_after_subsampling": len(mito_ids),
+            "mean_passing_mitogenome_read_length": round(mean_passing_mito_read_len, 3),
             "missing_gene_read_ids": len(gene_ids),
             "gene_min_target_aligned_fraction": gene_min_target_aligned_fraction,
             "mito_min_alignment_length": mito_min_alignment_length,
@@ -524,8 +517,10 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "mitogenome_length",
             "target_mitogenome_coverage",
             "mean_read_length",
-            "mitogenome_read_ids_before_subsampling",
+            "mitogenome_read_ids_passing_filters",
+            "estimated_mitogenome_target_reads_for_coverage",
             "mitogenome_read_ids_after_subsampling",
+            "mean_passing_mitogenome_read_length",
             "missing_gene_read_ids",
             "gene_min_target_aligned_fraction",
             "mito_min_alignment_length",
@@ -546,6 +541,8 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
     for row in pool_rows:
         lines.append(
             f"- `{row['read_set']}`: mito_reads={row['mitogenome_read_ids_after_subsampling']} "
+            f"(estimated_target={row.get('estimated_mitogenome_target_reads_for_coverage', '.')}; "
+            f"passing_filters={row.get('mitogenome_read_ids_passing_filters', '.')}) "
             f"+ missing_gene_reads={row['missing_gene_read_ids']} "
             f"=> pool={row['written_reads']} reads; approx_cov={row['approx_pool_coverage']}x; "
             f"filters: mito_aln_len>={row.get('mito_min_alignment_length', '.')}, "
