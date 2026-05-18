@@ -15,6 +15,7 @@ from .missing_gene_read_search import run_missing_gene_read_search
 from .missing_gene_recovery import run_missing_gene_recovery
 from .missing_gene_assembly_assessment import run_missing_gene_assembly_assessment
 from .recovered_contig_annotation import run_recovered_contig_annotation
+from .final_molecule_preparation import run_final_molecule_preparation
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
 from .applied_curation import run_applied_curation
@@ -151,6 +152,32 @@ def cmd_recovered_contig_annotation(args):
     print(f"  {outdir / 'recovered_contig_cds_validation.tsv'}")
     print(f"  {outdir / 'recovered_contig_annotation_report.md'}")
 
+
+
+
+def cmd_final_molecule_preparation(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_final_molecule_preparation(
+        config,
+        root,
+        ensure_dir(root / "12_final_molecule_preparation"),
+        input_molecule=args.input_molecule,
+        organism=args.organism,
+        expected_length=args.expected_length,
+        topology=args.topology,
+        transl_table=args.transl_table,
+        at_window_size=args.at_window_size,
+        at_min_pct=args.at_min_pct,
+        at_min_len=args.at_min_len,
+        existing_annotation=args.existing_annotation,
+    )
+    print(f"Final molecule preparation written to: {outdir}")
+    print(f"  {outdir / 'final_molecule.fasta'}")
+    print(f"  {outdir / 'final_molecule.gb'}")
+    print(f"  {outdir / 'final_molecule_feature_inventory.tsv'}")
+    print(f"  {outdir / 'at_rich_region.tsv'}")
+    print(f"  {outdir / 'final_molecule_report.md'}")
 
 def cmd_variant_evidence(args):
     config = load_config(args.config)
@@ -512,6 +539,20 @@ def build_parser():
     p_rca = sub.add_parser("recovered-contig-annotation", help="Annotate and validate the selected missing-gene recovery contig")
     p_rca.add_argument("--config", required=True)
     p_rca.set_defaults(func=cmd_recovered_contig_annotation)
+
+
+    p_fmp = sub.add_parser("final-molecule-preparation", help="Prepare final candidate mitochondrial molecule and annotate A+T-rich/control region")
+    p_fmp.add_argument("--config", required=True)
+    p_fmp.add_argument("--input-molecule", default=None)
+    p_fmp.add_argument("--organism", default=None)
+    p_fmp.add_argument("--expected-length", type=int, default=None)
+    p_fmp.add_argument("--topology", default="circular")
+    p_fmp.add_argument("--transl-table", type=int, default=None)
+    p_fmp.add_argument("--at-window-size", type=int, default=500)
+    p_fmp.add_argument("--at-min-pct", type=float, default=85.0)
+    p_fmp.add_argument("--at-min-len", type=int, default=500)
+    p_fmp.add_argument("--existing-annotation", default=None)
+    p_fmp.set_defaults(func=cmd_final_molecule_preparation)
 
     p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
     p_ve.add_argument("--config", required=True)
