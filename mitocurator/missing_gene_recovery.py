@@ -299,21 +299,34 @@ def _select_mitogenome_read_ids_for_target_coverage(
     return selected
 
 
-def _select_read_ids_from_paf(
+def _select_gene_read_ids_from_paf(
     paf_rows: List[Dict[str, Any]],
     min_mapq: int,
     min_identity: float,
-    min_target_coverage: float,
+    min_target_aligned_fraction: float,
 ) -> Set[str]:
+    """Select reads containing a missing reference gene/CDS.
+
+    The length threshold is dynamic. For the M. capixaba ND2 case, the manual
+    cutoff of ~700 nt corresponds to ~70% of the 982 nt ND2 reference. The same
+    fraction is now used for any missing CDS.
+    """
     keep = set()
+
     for row in paf_rows:
         if int(row["mapq"]) < min_mapq:
             continue
         if float(row["identity"]) < min_identity:
             continue
-        if float(row["target_coverage"]) < min_target_coverage:
+
+        target_length = int(row["target_length"])
+        min_target_aligned_length = int(round(target_length * min_target_aligned_fraction))
+
+        if int(row["target_aligned_length"]) < min_target_aligned_length:
             continue
+
         keep.add(str(row["read_id"]))
+
     return keep
 
 
@@ -350,11 +363,20 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
 
     threads = _resolve_threads(config)
     target_cov = float(safe_get(config, ["missing_gene_recovery", "target_mitogenome_coverage"], 400))
-    min_mapq = int(safe_get(config, ["missing_gene_recovery", "min_mapq"], 20))
-    gene_min_identity = float(safe_get(config, ["missing_gene_recovery", "gene_min_identity"], 70))
-    gene_min_target_cov = float(safe_get(config, ["missing_gene_recovery", "gene_min_target_coverage"], 50))
+    min_mapq = int(safe_get(config, ["missing_gene_recovery", "min_mapq"], 30))
+
+    # Missing-gene/CDS reads. The default 0.70 reproduces the ND2 manual
+    # threshold (~700 nt over a 982 nt reference) without hard-coding ND2.
+    gene_min_identity = float(safe_get(config, ["missing_gene_recovery", "gene_min_identity"], 65))
+    gene_min_target_aligned_fraction = float(
+        safe_get(config, ["missing_gene_recovery", "gene_min_target_aligned_fraction"], 0.70)
+    )
+
+    # Mitogenome-like reads used as the backbone local assembly pool.
     mito_min_identity = float(safe_get(config, ["missing_gene_recovery", "mito_min_identity"], 70))
-    mito_min_alignment_length = int(safe_get(config, ["missing_gene_recovery", "mito_min_alignment_length"], 500))
+    mito_min_alignment_length = int(
+        safe_get(config, ["missing_gene_recovery", "mito_min_alignment_length"], 1000)
+    )
     mito_min_reads = int(safe_get(config, ["missing_gene_recovery", "mito_min_reads"], 300))
     seed = int(safe_get(config, ["missing_gene_recovery", "random_seed"], 42))
     rng = random.Random(seed)
@@ -391,11 +413,11 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
         for row in mito_paf_rows:
             mito_hit_rows.append({"read_set": name, **row})
 
-        gene_ids = _select_read_ids_from_paf(
+        gene_ids = _select_gene_read_ids_from_paf(
             gene_paf_rows,
             min_mapq=min_mapq,
             min_identity=gene_min_identity,
-            min_target_coverage=gene_min_target_cov,
+            min_target_aligned_fraction=gene_min_target_aligned_fraction,
         )
         target_query_bases = int(target_cov * mito_len)
         mito_ids_all = _select_mitogenome_read_ids_for_target_coverage(
@@ -438,6 +460,9 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "mitogenome_read_ids_before_subsampling": ".",
             "mitogenome_read_ids_after_subsampling": len(mito_ids),
             "missing_gene_read_ids": len(gene_ids),
+            "gene_min_target_aligned_fraction": gene_min_target_aligned_fraction,
+            "mito_min_alignment_length": mito_min_alignment_length,
+            "min_mapq": min_mapq,
             "final_pool_read_ids": len(final_ids),
             "written_reads": written_reads,
             "written_bases": written_bases,
@@ -502,6 +527,9 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "mitogenome_read_ids_before_subsampling",
             "mitogenome_read_ids_after_subsampling",
             "missing_gene_read_ids",
+            "gene_min_target_aligned_fraction",
+            "mito_min_alignment_length",
+            "min_mapq",
             "final_pool_read_ids",
             "written_reads",
             "written_bases",
@@ -520,7 +548,9 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             f"- `{row['read_set']}`: mito_reads={row['mitogenome_read_ids_after_subsampling']} "
             f"+ missing_gene_reads={row['missing_gene_read_ids']} "
             f"=> pool={row['written_reads']} reads; approx_cov={row['approx_pool_coverage']}x; "
-            f"FASTQ={row['output_fastq']}"
+            f"filters: mito_aln_len>={row.get('mito_min_alignment_length', '.')}, "
+            f"gene_aln_fraction>={row.get('gene_min_target_aligned_fraction', '.')}, "
+            f"MAPQ>={row.get('min_mapq', '.')}; FASTQ={row['output_fastq']}"
         )
     (outdir / "missing_gene_recovery_report.md").write_text("\n".join(lines), encoding="utf-8")
 
