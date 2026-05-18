@@ -239,19 +239,20 @@ def _parse_paf(path: Path) -> List[Dict[str, Any]]:
 
 
 
+
+
 def _select_mitogenome_read_ids_for_target_coverage(
     paf_rows: List[Dict[str, Any]],
     min_mapq: int,
     min_identity: float,
     min_alignment_length: int,
-    target_mitogenome_coverage: float,
-    mitogenome_length: int,
-) -> tuple[Set[str], int, int, float]:
-    """Select high-confidence mitogenome-like reads up to a target coverage.
+    max_reads: int,
+) -> tuple[Set[str], int, int, float, str]:
+    """Select top high-confidence mitogenome-like reads.
 
-    The number of selected reads is not fixed. It is estimated from the target
-    coverage, mitogenome length, and the mean length of reads passing the strong
-    mitogenome filters.
+    This reproduces the M. capixaba HiFi empirical strategy: keep the strongest
+    mitogenome-like reads after strict PAF filters, then take the top N reads
+    for local recovery assembly. In the M. capixaba case, N=300.
     """
     best_by_read: Dict[str, Dict[str, Any]] = {}
 
@@ -278,18 +279,17 @@ def _select_mitogenome_read_ids_for_target_coverage(
         reverse=True,
     )
 
-    if not rows:
-        return set(), 0, 0, 0.0
-
-    mean_passing_read_length = sum(int(r["query_length"]) for r in rows) / len(rows)
-    target_bases = int(round(target_mitogenome_coverage * mitogenome_length))
-    estimated_target_reads = int(round(target_bases / mean_passing_read_length)) if mean_passing_read_length else len(rows)
-    estimated_target_reads = max(1, estimated_target_reads)
-
-    selected_rows = rows[:estimated_target_reads]
+    selected_rows = rows[:max_reads] if max_reads > 0 else rows
     selected_ids = {str(row["read_id"]) for row in selected_rows}
 
-    return selected_ids, len(rows), estimated_target_reads, mean_passing_read_length
+    mean_passing_read_length = (
+        sum(int(r["query_length"]) for r in rows) / len(rows)
+        if rows else 0.0
+    )
+
+    selection_note = f"top_{max_reads}_of_{len(rows)}_passing_reads" if max_reads > 0 else f"all_{len(rows)}_passing_reads"
+
+    return selected_ids, len(rows), len(selected_rows), mean_passing_read_length, selection_note
 
 def _select_gene_read_ids_from_paf(
     paf_rows: List[Dict[str, Any]],
@@ -320,6 +320,42 @@ def _select_gene_read_ids_from_paf(
         keep.add(str(row["read_id"]))
 
     return keep
+
+def _flye_read_option(read_type: str) -> str:
+    rtype = str(read_type).lower()
+    if rtype in {"pacbio_hifi", "hifi"}:
+        return "--pacbio-hifi"
+    if rtype in {"ont", "nanopore"}:
+        return "--nano-raw"
+    if rtype in {"pacbio_clr", "clr"}:
+        return "--pacbio-raw"
+    return "--pacbio-hifi"
+
+
+def _run_flye_for_pool(
+    config: dict,
+    read_set_name: str,
+    read_type: str,
+    pool_fastq: Path,
+    selected_dir: Path,
+    threads: int,
+    genome_size: str,
+    log_path: Path,
+) -> Path:
+    flye = str(safe_get(config, ["tools", "flye"], "flye"))
+    read_option = _flye_read_option(read_type)
+    outdir = selected_dir / f"{read_set_name}.flye_missing_gene_recovery"
+
+    cmd = (
+        f"{flye} {read_option} {pool_fastq} "
+        f"--genome-size {genome_size} "
+        f"--threads {threads} "
+        f"--out-dir {outdir}"
+    )
+
+    _run_shell(cmd, log_path)
+    return outdir
+
 
 def _long_readsets(config: dict) -> List[Dict[str, Any]]:
     out = []
@@ -358,19 +394,23 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
 
     # Missing-gene/CDS reads. The default 0.70 reproduces the ND2 manual
     # threshold (~700 nt over a 982 nt reference) without hard-coding ND2.
-    gene_min_identity = float(safe_get(config, ["missing_gene_recovery", "gene_min_identity"], 65))
+    gene_min_identity = float(safe_get(config, ["missing_gene_recovery", "gene_min_identity"], 0))
     gene_min_target_aligned_fraction = float(
-        safe_get(config, ["missing_gene_recovery", "gene_min_target_aligned_fraction"], 0.70)
+        safe_get(config, ["missing_gene_recovery", "gene_min_target_aligned_fraction"], 0.713)
     )
 
     # Mitogenome-like reads used as the backbone local assembly pool.
-    mito_min_identity = float(safe_get(config, ["missing_gene_recovery", "mito_min_identity"], 70))
+    mito_min_identity = float(safe_get(config, ["missing_gene_recovery", "mito_min_identity"], 0))
     mito_min_alignment_length = int(
         safe_get(config, ["missing_gene_recovery", "mito_min_alignment_length"], 10000)
     )
+    hifi_mitogenome_reads = int(safe_get(config, ["missing_gene_recovery", "hifi_mitogenome_reads"], 300))
     mito_min_reads = int(safe_get(config, ["missing_gene_recovery", "mito_min_reads"], 300))
     seed = int(safe_get(config, ["missing_gene_recovery", "random_seed"], 42))
     rng = random.Random(seed)
+
+    run_flye = bool(safe_get(config, ["missing_gene_recovery", "run_flye"], False))
+    flye_genome_size = str(safe_get(config, ["missing_gene_recovery", "flye_genome_size"], "20k"))
 
     readsets = _long_readsets(config)
 
@@ -410,14 +450,13 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             min_identity=gene_min_identity,
             min_target_aligned_fraction=gene_min_target_aligned_fraction,
         )
-        mito_ids_all, mito_ids_passing_filters, estimated_target_mito_reads, mean_passing_mito_read_len = (
+        mito_ids_all, mito_ids_passing_filters, estimated_target_mito_reads, mean_passing_mito_read_len, mito_selection_note = (
             _select_mitogenome_read_ids_for_target_coverage(
                 mito_paf_rows,
                 min_mapq=min_mapq,
                 min_identity=mito_min_identity,
                 min_alignment_length=mito_min_alignment_length,
-                target_mitogenome_coverage=target_cov,
-                mitogenome_length=mito_len,
+                max_reads=hifi_mitogenome_reads,
             )
         )
 
@@ -431,14 +470,37 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
         written_reads, written_bases = _write_reads_by_id(rs["reads"], out_fastq, final_ids)
 
         flye_script = selected_dir / f"{name}.missing_gene_recovery.flye.sh"
+        flye_outdir = selected_dir / f"{name}.flye_missing_gene_recovery"
+        flye_read_option = _flye_read_option(rtype)
+
         flye_script.write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n\n"
-            f"flye --pacbio-hifi {out_fastq} --genome-size 20k "
-            f"--threads {threads} --out-dir {selected_dir / (name + '.flye_missing_gene_recovery')}\n",
+            f"{str(safe_get(config, ['tools', 'flye'], 'flye'))} {flye_read_option} {out_fastq} "
+            f"--genome-size {flye_genome_size} "
+            f"--threads {threads} --out-dir {flye_outdir}\n",
             encoding="utf-8",
         )
         flye_script.chmod(0o755)
+
+        flye_status = "not_run"
+        flye_assembly = flye_outdir / "assembly.fasta"
+
+        if run_flye:
+            try:
+                _run_flye_for_pool(
+                    config=config,
+                    read_set_name=name,
+                    read_type=rtype,
+                    pool_fastq=out_fastq,
+                    selected_dir=selected_dir,
+                    threads=threads,
+                    genome_size=flye_genome_size,
+                    log_path=logs / f"{name}.flye_missing_gene_recovery.log",
+                )
+                flye_status = "completed" if flye_assembly.exists() else "completed_no_assembly"
+            except Exception as exc:
+                flye_status = f"failed:{exc}"
 
         pool_rows.append({
             "read_set": name,
@@ -449,7 +511,7 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "target_mitogenome_coverage": target_cov,
             "mean_read_length": round(mean_read_len, 3),
             "mitogenome_read_ids_passing_filters": mito_ids_passing_filters,
-            "estimated_mitogenome_target_reads_for_coverage": estimated_target_mito_reads,
+            "mitogenome_target_reads_requested": hifi_mitogenome_reads,
             "mitogenome_read_ids_after_subsampling": len(mito_ids),
             "mean_passing_mitogenome_read_length": round(mean_passing_mito_read_len, 3),
             "missing_gene_read_ids": len(gene_ids),
@@ -462,6 +524,11 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "approx_pool_coverage": round(written_bases / mito_len, 3) if mito_len else 0,
             "output_fastq": str(out_fastq),
             "flye_script": str(flye_script),
+            "run_flye": run_flye,
+            "flye_genome_size": flye_genome_size,
+            "flye_status": flye_status,
+            "flye_outdir": str(flye_outdir),
+            "flye_assembly": str(flye_assembly) if flye_assembly.exists() else ".",
         })
 
     _write_tsv(
@@ -518,7 +585,7 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "target_mitogenome_coverage",
             "mean_read_length",
             "mitogenome_read_ids_passing_filters",
-            "estimated_mitogenome_target_reads_for_coverage",
+            "mitogenome_target_reads_requested",
             "mitogenome_read_ids_after_subsampling",
             "mean_passing_mitogenome_read_length",
             "missing_gene_read_ids",
@@ -531,6 +598,11 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
             "approx_pool_coverage",
             "output_fastq",
             "flye_script",
+            "run_flye",
+            "flye_genome_size",
+            "flye_status",
+            "flye_outdir",
+            "flye_assembly",
         ],
     )
 
@@ -541,13 +613,14 @@ def run_missing_gene_recovery(config: dict, root: Path, outdir: Path | None = No
     for row in pool_rows:
         lines.append(
             f"- `{row['read_set']}`: mito_reads={row['mitogenome_read_ids_after_subsampling']} "
-            f"(estimated_target={row.get('estimated_mitogenome_target_reads_for_coverage', '.')}; "
+            f"(estimated_target={row.get('mitogenome_target_reads_requested', '.')}; "
             f"passing_filters={row.get('mitogenome_read_ids_passing_filters', '.')}) "
             f"+ missing_gene_reads={row['missing_gene_read_ids']} "
             f"=> pool={row['written_reads']} reads; approx_cov={row['approx_pool_coverage']}x; "
             f"filters: mito_aln_len>={row.get('mito_min_alignment_length', '.')}, "
             f"gene_aln_fraction>={row.get('gene_min_target_aligned_fraction', '.')}, "
-            f"MAPQ>={row.get('min_mapq', '.')}; FASTQ={row['output_fastq']}"
+            f"MAPQ>={row.get('min_mapq', '.')}; FASTQ={row['output_fastq']}; "
+            f"flye_status={row.get('flye_status', '.')}; assembly={row.get('flye_assembly', '.')}"
         )
     (outdir / "missing_gene_recovery_report.md").write_text("\n".join(lines), encoding="utf-8")
 
