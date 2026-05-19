@@ -402,71 +402,50 @@ def cmd_run(args):
     else:
         print("[11/11] Integrated report: disabled")
 
+    def _print_existing(paths):
+        for p in paths:
+            if p.exists():
+                print(f"  {p}")
+
     print("\nMain outputs:")
-    print(f"  {logs / 'tool_check.tsv'}")
-    print(f"  {root / '05_refinement' / 'refined.gb'}")
-    print(f"  {root / '05_refinement' / 'expected_gene_set.tsv'}")
-    print(f"  {root / '05_refinement' / 'added_features.tsv'}")
-    print(f"  {root / '05_refinement' / 'missing_gene_candidates.tsv'}")
-    print(f"  {root / '05_refinement' / 'cds_refinement_candidates.tsv'}")
-    print(f"  {root / '05_refinement' / 'reference_similarity_candidates.tsv'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_reference_check.tsv'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_stop_context.tsv'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_reference_alignment.tsv'}")
-    print(f"  {root / '05_refinement' / 'missing_gene_candidate_proteins.faa'}")
-    print(f"  {root / '05_refinement' / 'problematic_cds_proteins.faa'}")
-    print(f"  {root / '05_refinement' / 'curation_recommendations.tsv'}")
-    print(f"  {root / '05_refinement' / 'curation_recommendations.md'}")
+    _print_existing([
+        logs / "tool_check.tsv",
+        root / "05_refinement" / "refined.gb",
+        root / "05_refinement" / "curation_recommendations.tsv",
+        root / "05_refinement" / "curation_recommendations.md",
+        qc_dir / "gene_qc.tsv",
+        qc_dir / "diagnostic_summary.md",
+        root / "06_annotation_assessment" / "annotation_assessment_report.md",
+        root / "06_annotation_assessment" / "annotation_assessment_report.html",
+        root / "06_annotation_assessment" / "annotation_evidence_summary.tsv",
+        root / "09_missing_gene_recovery" / "missing_gene_recovery_report.md",
+        root / "09_missing_gene_recovery" / "selected_read_pool.tsv",
+        root / "10_missing_gene_assembly_assessment" / "selected_recovery_contig.tsv",
+        root / "10_missing_gene_assembly_assessment" / "selected_recovery_contig.fasta",
+        root / "10_missing_gene_assembly_assessment" / "missing_gene_assembly_assessment_report.md",
+        root / "11_recovered_contig_annotation" / "recovered_contig_annotation_report.md",
+        root / "11_recovered_contig_annotation" / "recovered_contig_annotation_summary.tsv",
+        root / "11_recovered_contig_annotation" / "recovered_contig_cds_validation.tsv",
+        root / "15_integrated_report" / "integrated_curation_report.md",
+        root / "15_integrated_report" / "integrated_curation_report.html",
+        root / "15_integrated_report" / "integrated_gene_decisions.tsv",
+    ])
 
-    if read_mapping_enabled:
-        print(f"  {root / '08_read_mapping' / 'mitogenome_reference.fasta'}")
-        print(f"  {root / '08_read_mapping' / 'readsets.tsv'}")
-        print(f"  {root / '08_read_mapping' / 'mapping_summary.tsv'}")
-        print(f"  {root / '08_read_mapping' / 'coverage_by_position.tsv'}")
-        print(f"  {root / '08_read_mapping' / 'coverage_by_gene.tsv'}")
-
-    if variant_evidence_enabled:
-        print(f"  {root / '09_variant_evidence' / 'variant_summary.tsv'}")
-        print(f"  {root / '09_variant_evidence' / 'gene_variant_evidence.tsv'}")
-
-    if read_support_enabled:
-        print(f"  {root / '10_read_support' / 'problematic_stop_read_support.tsv'}")
-        print(f"  {root / '10_read_support' / 'problematic_stop_variants.tsv'}")
-        print(f"  {root / '10_read_support' / 'read_support_summary.md'}")
-        print(f"  {root / '10_read_support' / 'readset_consensus_recommendations.tsv'}")
-        print(f"  {root / '10_read_support' / 'readset_consensus_recommendations.md'}")
-
-    if targeted_enabled:
-        print(f"  {root / '11_targeted_extraction' / 'targets.bed'}")
-        print(f"  {root / '11_targeted_extraction' / 'targeted_read_extraction.tsv'}")
-        print(f"  {root / '11_targeted_extraction' / 'targeted_read_extraction.md'}")
-
-    if pools_enabled:
-        print(f"  {root / '12_reconstruction_pools' / 'reconstruction_pools.tsv'}")
-        print(f"  {root / '12_reconstruction_pools' / 'reconstruction_pools.md'}")
-
-    if consensus_enabled:
-        print(f"  {root / '13_targeted_consensus' / 'targeted_consensus.tsv'}")
-        print(f"  {root / '13_targeted_consensus' / 'targeted_consensus.md'}")
-        print(f"  {root / '13_targeted_consensus' / 'best_missing_gene_candidates.tsv'}")
-        print(f"  {root / '13_targeted_consensus' / 'best_missing_gene_candidates.md'}")
-        print(f"  {root / '13_targeted_consensus' / 'cross_readset_missing_gene_candidates.tsv'}")
-        print(f"  {root / '13_targeted_consensus' / 'cross_readset_missing_gene_candidates.md'}")
-
-    if candidate_assembly_enabled:
-        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_targets.tsv'}")
-        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_summary.tsv'}")
-        print(f"  {root / '14_candidate_assembly' / 'candidate_assembly_summary.md'}")
-
-    print(f"  {qc_dir / 'gene_qc.tsv'}")
-    print(f"  {qc_dir / 'problematic_features.tsv'}")
-    print(f"  {qc_dir / 'intergenic_regions.tsv'}")
-    print(f"  {qc_dir / 'diagnostic_summary.md'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_assessment_report.md'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_assessment_report.html'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_evidence_summary.tsv'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_gene_inventory.tsv'}")
-    print(f"  {root / '06_annotation_assessment' / 'annotation_review_targets.tsv'}")
+    optional_outputs = [
+        root / "10_read_support" / "read_support_summary.md",
+        root / "10_read_support" / "readset_consensus_recommendations.tsv",
+        root / "11_targeted_extraction" / "targets.bed",
+        root / "11_targeted_extraction" / "targeted_read_extraction.tsv",
+        root / "12_reconstruction_pools" / "reconstruction_pools.tsv",
+        root / "13_targeted_consensus" / "targeted_consensus.tsv",
+        root / "13_targeted_consensus" / "best_missing_gene_candidates.tsv",
+        root / "13_targeted_consensus" / "cross_readset_missing_gene_candidates.tsv",
+        root / "14_candidate_assembly" / "candidate_assembly_summary.tsv",
+    ]
+    existing_optional = [p for p in optional_outputs if p.exists()]
+    if existing_optional:
+        print("\nOptional advanced outputs:")
+        _print_existing(existing_optional)
 
 
 def build_parser():
