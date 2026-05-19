@@ -125,9 +125,12 @@ targeted_consensus:
   translate_consensus: true
   reuse_existing_outputs: true
 
-# Advanced/compatibility options
+# Preferred output format
 output:
-  outdir: /path/explicit_outdir
+  outdir: /path/to/output
+
+# Backward-compatible output format (still accepted):
+# output: /path/to/output
 
 mitofinder:
   reference_gb: /path/legacy_reference.gb
