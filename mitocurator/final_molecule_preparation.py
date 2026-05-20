@@ -212,7 +212,7 @@ def run_final_molecule_preparation(
             qualifiers={
                 "note": [
                     "A+T-rich control region",
-                    "putative mitochondrial control region; not automatically classified as D-loop",
+                    "putative mitochondrial control region; classification remains conservative",
                 ]
             },
         )
