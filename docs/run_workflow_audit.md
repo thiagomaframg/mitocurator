@@ -53,7 +53,8 @@ Fluxo padrão reorganizado para ser mais enxuto e priorizar recuperação direta
 8. recovered-contig-annotation (quando há `selected_recovery_contig.fasta`)
 9. apply evidence-backed curation (opcional/conservador)
 10. final molecule preparation (somente com molécula curada/final disponível)
-11. integrated report
+11. coverage-cnv-assessment (validação conservadora de cobertura/junção/CNV da molécula candidata)
+12. integrated report
 
 ### Comportamento de tolerância a falhas esperado no principal
 
@@ -92,3 +93,8 @@ Podem ser ativados por configuração quando o estudo exigir reconstrução apro
 - Um contig recuperado pode resolver genes ausentes e permitir validação funcional local.
 - Isso não garante, por si só, que represente a molécula mitocondrial final curada completa (topologia, circularização, consistência global e integração final ainda precisam de validação).
 - Portanto, o contig recuperado deve ser tratado como evidência de recuperação/anotação, não como substituto automático da molécula final.
+
+
+## 9) Próximo módulo de validação após final-molecule-preparation
+
+- `coverage-cnv-assessment`: avalia compatibilidade de cobertura, equilíbrio de flancos da junção circular e sinais de CNV/duplicação/deleção local, sem afirmar circularidade biológica por si só.

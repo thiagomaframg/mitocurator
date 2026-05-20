@@ -16,6 +16,7 @@ from .missing_gene_recovery import run_missing_gene_recovery
 from .missing_gene_assembly_assessment import run_missing_gene_assembly_assessment
 from .recovered_contig_annotation import run_recovered_contig_annotation
 from .final_molecule_preparation import run_final_molecule_preparation
+from .coverage_cnv_assessment import run_coverage_cnv_assessment
 from .variant_evidence import run_variant_evidence
 from .integrated_report import run_integrated_report
 from .applied_curation import run_applied_curation
@@ -178,6 +179,35 @@ def cmd_final_molecule_preparation(args):
     print(f"  {outdir / 'final_molecule_feature_inventory.tsv'}")
     print(f"  {outdir / 'at_rich_region.tsv'}")
     print(f"  {outdir / 'final_molecule_report.md'}")
+
+
+
+def cmd_coverage_cnv_assessment(args):
+    config = load_config(args.config)
+    root = outdir_from_config(config)
+    outdir = run_coverage_cnv_assessment(
+        config,
+        root,
+        ensure_dir(root / "13_coverage_cnv_assessment"),
+        input_molecule=args.input_molecule,
+        input_bam=args.input_bam,
+        read_set_name=args.read_set_name,
+        window_size=args.window_size,
+        step_size=args.step_size,
+        duplication_ratio=args.duplication_ratio,
+        strong_duplication_ratio=args.strong_duplication_ratio,
+        deletion_ratio=args.deletion_ratio,
+        junction_flank=args.junction_flank,
+        min_mapq=args.min_mapq,
+        threads=args.threads,
+    )
+    print(f"Coverage/CNV assessment written to: {outdir}")
+    print(f"  {outdir / 'coverage_by_position.tsv.gz'}")
+    print(f"  {outdir / 'coverage_windows.tsv'}")
+    print(f"  {outdir / 'coverage_by_feature.tsv'}")
+    print(f"  {outdir / 'cnv_candidates.tsv'}")
+    print(f"  {outdir / 'circular_junction_coverage.tsv'}")
+    print(f"  {outdir / 'coverage_cnv_report.md'}")
 
 def cmd_variant_evidence(args):
     config = load_config(args.config)
@@ -532,6 +562,21 @@ def build_parser():
     p_fmp.add_argument("--at-min-len", type=int, default=500)
     p_fmp.add_argument("--existing-annotation", default=None)
     p_fmp.set_defaults(func=cmd_final_molecule_preparation)
+
+    p_cca = sub.add_parser("coverage-cnv-assessment", help="Assess coverage, circular junction compatibility, and CNV-like depth signals")
+    p_cca.add_argument("--config", required=True)
+    p_cca.add_argument("--input-molecule", default=None)
+    p_cca.add_argument("--input-bam", action="append", default=None)
+    p_cca.add_argument("--read-set-name", action="append", default=None)
+    p_cca.add_argument("--window-size", type=int, default=100)
+    p_cca.add_argument("--step-size", type=int, default=None)
+    p_cca.add_argument("--duplication-ratio", type=float, default=1.5)
+    p_cca.add_argument("--strong-duplication-ratio", type=float, default=2.0)
+    p_cca.add_argument("--deletion-ratio", type=float, default=0.5)
+    p_cca.add_argument("--junction-flank", type=int, default=500)
+    p_cca.add_argument("--min-mapq", type=int, default=20)
+    p_cca.add_argument("--threads", type=int, default=None)
+    p_cca.set_defaults(func=cmd_coverage_cnv_assessment)
 
     p_ve = sub.add_parser("variant-evidence", help="Call and summarize SNP/indel evidence from read-mapping BAMs")
     p_ve.add_argument("--config", required=True)
