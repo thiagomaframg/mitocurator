@@ -60,9 +60,15 @@ repair_cds_local_consensus(config, record, problems, reads_cfg, outdir, mode)
 ├── [2] minimap2 (preset por tecnologia) → samtools sort/index → BAM filtrado
 │         Filtros: MQ ≥ min_mq, sem secondary (flag 256), sem supplementary (2048)
 │
-├── [3a] pysam.fetch() na região → escrever reads em reads_subset.fa
-│          Subsample aleatório até mafft_max_reads reads (default 500)
-│          para controlar tempo de MAFFT em genes com alta cobertura.
+├── [3a] pysam.fetch() na região → recortar cada read por CIGAR/get_aligned_pairs()
+│          para extrair apenas o segmento que se alinha às coordenadas da região
+│          (incluindo flank_bp) → escrever segmentos recortados em reads_subset.fa.
+│          Reads HiFi têm 10–20 kb; sem recorte o MAFFT alinharia sequências quase
+│          inteiras contra uma region.fa pequena (lento e prejudicial ao alinhamento
+│          da região de interesse). O recorte por aligned_pairs replica o que a
+│          curadoria manual fez: extrair "a região ND1 de cada read", não a read
+│          completa. Registrar no audit log: reads_trim_method="aligned_pairs".
+│          Subsample aleatório até mafft_max_reads após o recorte.
 │
 ├── [3b] mafft --auto --thread N --quiet <(cat region.fa reads_subset.fa)
 │          → MSA em FASTA (region como primeira sequência)
@@ -183,6 +189,7 @@ Uma linha JSON por CDS processado:
     "region": "atg005843l_path_rc_rotated:11900-13200",
     "flank_bp": 200,
     "min_mq": 20,
+    "reads_trim_method": "aligned_pairs",
     "reads_fetched": 312,
     "reads_used_in_mafft": 312,
     "mafft_gap_col_threshold": 0.50,
@@ -292,19 +299,56 @@ módulo deve recuperá-los mapeando contra a sequência de referência de
 ```bash
 # após mitocurator run --mode apply:
 python3 - <<'EOF'
+import sys
 from Bio import SeqIO
-from Bio.Seq import Seq
+
+EXPECTED_13  = ["ATP6","ATP8","COX1","COX2","COX3","CYTB",
+                "ND1","ND2","ND3","ND4","ND4L","ND5","ND6"]
+EXACT_LEN    = {"ND1": 882,  "CYTB": 1143, "ND4": 1305}
+EXACT_AA     = {"ND1": 294,  "CYTB": 381,  "ND4": 435}
+GENETIC_CODE = 5  # ler de config na prática
 
 rec = next(SeqIO.parse("output/final.gb", "genbank"))
-cds = {f.qualifiers["gene"][0]: f for f in rec.features if f.type == "CDS"}
-for gene, exp_nt, exp_aa in [("ND1", 882, 294), ("CYTB", 1143, 381), ("ND4", 1305, 435)]:
-    feat = cds[gene]
-    nt = feat.extract(rec.seq)
-    aa = str(nt.translate(table=5, to_stop=False))
+cds = {}
+for f in rec.features:
+    if f.type == "CDS":
+        name = f.qualifiers.get("gene", f.qualifiers.get("product", ["?"]))[0]
+        cds[name] = f
+
+failures = []
+
+# 1. todos os 13 CDS presentes e sem stops internos
+for gene in EXPECTED_13:
+    if gene not in cds:
+        failures.append(f"MISSING: {gene}")
+        print(f"FAIL  {gene}: ausente")
+        continue
+    nt = cds[gene].extract(rec.seq)
+    aa = str(nt.translate(table=GENETIC_CODE, to_stop=False))
     internal = aa[:-1].count("*")
-    print(f"{gene}: {len(nt)} nt / {len(aa)-1} aa / {internal} stops → {'OK' if len(nt)==exp_nt and internal==0 else 'FAIL'}")
-nd2 = cds.get("ND2")
-print(f"ND2: {'presente' if nd2 else 'AUSENTE'}")
+    if internal:
+        failures.append(f"STOPS: {gene} ({internal} stops internos)")
+    print(f"{'OK  ' if not internal else 'FAIL'} {gene}: {len(nt)} nt / {len(aa)-1} aa / {internal} stops")
+
+# 2. comprimento exato para genes de regressão
+for gene in [g for g in EXACT_LEN if g in cds]:
+    nt = cds[gene].extract(rec.seq)
+    aa = str(nt.translate(table=GENETIC_CODE, to_stop=False))
+    ok = len(nt) == EXACT_LEN[gene] and len(aa)-1 == EXACT_AA[gene]
+    if not ok:
+        failures.append(f"LEN: {gene} ({len(nt)} nt / {len(aa)-1} aa, esperado {EXACT_LEN[gene]} nt / {EXACT_AA[gene]} aa)")
+    print(f"{'OK  ' if ok else 'FAIL'} {gene} comprimento: {len(nt)} nt / {len(aa)-1} aa")
+
+# 3. comprimento do mitogenoma
+ok_genome = len(rec.seq) == 19526
+if not ok_genome:
+    failures.append(f"GENOME_LEN: {len(rec.seq)} bp (esperado 19526)")
+print(f"\nMitogenoma: {len(rec.seq)} bp {'OK' if ok_genome else 'FAIL (esperado 19526)'}")
+
+print(f"\n{'REGRESSÃO OK' if not failures else 'REGRESSÃO FALHOU'}")
+for f in failures:
+    print(f"  - {f}")
+sys.exit(len(failures))
 EOF
 ```
 
