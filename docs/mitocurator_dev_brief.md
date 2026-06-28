@@ -340,6 +340,10 @@ for gene in [g for g in EXACT_LEN if g in cds]:
     print(f"{'OK  ' if ok else 'FAIL'} {gene} comprimento: {len(nt)} nt / {len(aa)-1} aa")
 
 # 3. comprimento do mitogenoma
+# Ground truth específico deste caso de validação (conhecido pela curadoria manual prévia).
+# O pipeline de produção NUNCA deve usar comprimento total esperado como critério de sucesso
+# — espécies novas não têm essa resposta de antemão. Este check existe só para confirmar
+# que o pipeline reproduz a resposta já conhecida deste caso.
 ok_genome = len(rec.seq) == 19526
 if not ok_genome:
     failures.append(f"GENOME_LEN: {len(rec.seq)} bp (esperado 19526)")
