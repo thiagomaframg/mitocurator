@@ -158,6 +158,7 @@ def _context_features(record, start0, end0):
 
 def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
     min_nt = int(safe_get(config, ["refinement", "orf_min_nt"], 150))
+    genetic_code = int(safe_get(config, ["project", "genetic_code"], 5))
     exp = pd.read_csv(expected_gene_tsv, sep="\t")
     missing = exp[(exp["type"] == "CDS") & (exp["status"] == "MISSING")]["gene"].tolist()
     gaps = sorted(_intergenic_gaps(record), key=lambda g: g["length"], reverse=True)
@@ -186,7 +187,7 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
                             j += 3
                         orf_len = j - i
                         if orf_len >= min_nt:
-                            aa_len, internal, term = _translate_stop_metrics(nuc[i:j], code=5)
+                            aa_len, internal, term = _translate_stop_metrics(nuc[i:j], code=genetic_code)
                             top_for_gene.append((internal, -orf_len, strand, frame, i, j, aa_len, term, gap))
                         i = j + 3
         top_for_gene.sort(key=lambda x: (x[0], x[1]))
@@ -219,7 +220,7 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
 
 def find_cds_refinement_candidates(config, record, problematic_features_tsv, out_tsv):
     window = int(safe_get(config, ["refinement", "cds_refinement_window"], 300))
-    code = 5
+    code = int(safe_get(config, ["project", "genetic_code"], 5))
     rows = []
     cds_feats = [f for f in record.features if f.type == "CDS"]
 
