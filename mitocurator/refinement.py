@@ -202,14 +202,13 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
                 end0 = (gap["start0"] + j) % len(record.seq)
             left, right = _context_features(record, min(start0, end0), max(start0, end0))
             context = f"gap_{gap['start0']+1}..{gap['end0']}|len={gap['length']}|AT={gap['at_content']}"
-            strong = (gene == "ND2" and ((gap["start0"] + 1) <= 5411 <= max(gap["end0"], 5411) or gap["length"] >= 500))
             rows.append({
                 "gene": gene, "candidate_id": f"{gene}_cand{cid}", "seqid": record.id,
                 "start": start0 + 1, "end": end0, "strand": strand, "length_nt": l, "length_aa": aa_len,
                 "frame": frame, "internal_stop_count": internal, "terminal_stop": term,
                 "overlaps_existing_feature": "no", "nearest_left_feature": left, "nearest_right_feature": right,
                 "region_context": context,
-                "decision_hint": "STRONG_CANDIDATE_REGION" if strong else ("CANDIDATE_REGION" if gap["length"] >= 500 else "LOW_PRIORITY"),
+                "decision_hint": "STRONG_CANDIDATE_REGION" if gap["length"] >= 500 else "LOW_PRIORITY",
                 "comment": "ORF scan on intergenic regions only; no automatic rescue applied",
             })
             cid += 1
