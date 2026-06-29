@@ -79,6 +79,7 @@ def repair_cds_local_consensus(
     shift_nt          = int(  safe_get(lc,     ["shift_nt"],                60))
     length_tol_frac   = float(safe_get(lc,     ["length_tol_frac"],         0.15))
     max_stops_in_read = int(  safe_get(lc,     ["max_stops_in_read"],        0))
+    min_identity_pct  = float(safe_get(lc,     ["min_identity_pct"],        70.0))
     genetic_code      = int(  safe_get(config, ["project", "genetic_code"],  5))
 
     reads_cfg   = safe_get(config, ["reads"], {})
@@ -260,10 +261,14 @@ def repair_cds_local_consensus(
         stops_aft = val["internal_stops"]
         n_frac    = val["n_fraction"]
 
+        identity_pct = val.get("identity_pct")
+
         if stops_aft > 0:
             action = "REJECTED_STOPS_REMAIN"
         elif n_frac > max_n_frac:
             action = "REJECTED_HIGH_N"
+        elif identity_pct is not None and identity_pct < min_identity_pct:
+            action = "REJECTED_LOW_IDENTITY"
         elif not coords_confirmed:
             # Candidate sequence is valid but assembly coordinates were not confirmed
             # by tblastn — splice position is unreliable; do not modify the record.
@@ -275,7 +280,8 @@ def repair_cds_local_consensus(
 
         # Write candidate FASTA for all non-diagnose outcomes where a valid sequence
         # was built (including REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY for inspection).
-        _will_write = action in ("SUGGEST", "APPLIED", "REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY")
+        _will_write = action in ("SUGGEST", "APPLIED",
+                                  "REJECTED_LOW_IDENTITY", "REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY")
         cand_fa = None
         if mode != "diagnose" and _will_write:
             cand_fa = gene_dir / f"{gene}_candidate.fa"
