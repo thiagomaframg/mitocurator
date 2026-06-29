@@ -573,11 +573,27 @@ def _scan_boundary_shifts(
     Accepts candidates with:
       - 0 internal stop codons
       - |aa_len - ref_prot_len| / ref_prot_len ≤ tol_frac
-    Returns the candidate with fewest stops then smallest length deviation, or None.
+    Among valid candidates, prefers (in order):
+      1. Starts with ATG or TTG ("canonical" mitochondrial start codons)
+      2. Smallest deviation from ref_prot_len
+
+    Rationale for restricting canonical starts to ATG/TTG: while genetic code 5
+    (invertebrate mitochondrial) lists ATA, ATC, ATT, GTG as additional possible
+    starts, large-scale surveys of annotated metazoan mitogenomes show that >95 %
+    of CDS annotated starts use ATG or TTG.  The remaining alternatives are
+    biologically valid but statistically rare as real start codons; treating them
+    as non-canonical avoids preferring spurious upstream extensions that happen to
+    begin with ATA or GTG over the correct, shorter ORF beginning with ATG/TTG.
+    Non-canonical starts are still accepted as valid candidates — they simply lose
+    the tiebreak against a canonical-start window of comparable length.
     """
-    best_stops:    int       = 999
-    best_len_diff: int       = 999
-    best_seq:      str | None = None
+    # Canonical starts: statistically dominant in metazoan mitogenomes (>95 %).
+    # Non-canonical code-5 starts (ATA, ATC, ATT, GTG) remain valid sequence
+    # candidates but are deprioritised in the tiebreak — see docstring above.
+    CANONICAL_STARTS = frozenset({"ATG", "TTG"})
+
+    best_score: tuple | None = None
+    best_seq:   str | None   = None
 
     n = len(consensus_nt)
 
@@ -596,18 +612,18 @@ def _scan_boundary_shifts(
                 except Exception:
                     continue
                 internal = aa[:-1].count("*") if len(aa) > 1 else 0
+                if internal > 0:
+                    continue
                 aa_len   = len(aa.rstrip("*"))
                 len_diff = abs(aa_len - ref_prot_len)
                 if len_diff / ref_prot_len > tol_frac:
                     continue
-                if internal == 0 and (
-                    best_seq is None
-                    or internal < best_stops
-                    or (internal == best_stops and len_diff < best_len_diff)
-                ):
-                    best_stops    = internal
-                    best_len_diff = len_diff
-                    best_seq      = trimmed
+                has_canonical = trimmed[:3] in CANONICAL_STARTS
+                # score: (no_canonical_start, len_diff) — lower is better
+                score = (0 if has_canonical else 1, len_diff)
+                if best_seq is None or score < best_score:
+                    best_score = score
+                    best_seq   = trimmed
 
     return best_seq
 
