@@ -10,13 +10,16 @@ Phase 1 targets (tblastn-first coordinates + read majority consensus):
   - ND6:  0 internal stops (annotation frame error → tblastn gives correct coords)
   - CYTB: 0 internal stops + ~1143 nt (annotation 30 nt short → tblastn extends to correct start)
 
+Phase 1 targets (tblastn-first coordinates + read majority consensus):
+  - ND4:  1305 nt / 434 aa / 0 stops (bimodal NUMT filter discards ~797 reads at 88%
+          identity, keeps ~82 true mito reads at 98%; was REJECTED_HIGH_N before)
+
 Phase 2 targets (not counted as failures):
   - ND2:  recovery blocked — tblastn finds no hit (ND2 too divergent in M. scutellaris;
           needs alternative reference or read-based localisation)
   - COX1: truncated annotation (702 nt vs ~1548 nt real)
   - ND5:  truncated annotation (1008 nt vs ~1743 nt real)
   - ND1:  truncated (642 nt → 882 nt expected)
-  - ND4:  severely truncated (720 nt → 1305 nt expected)
   - ATP8: recovery (insect ATP8 ~168 nt, overlaps ATP6; not in problems list)
   - Genome: 19526 bp
 """
@@ -162,6 +165,11 @@ EXPECTED_13  = ["ATP6","ATP8","COX1","COX2","COX3","CYTB",
 # Phase 1: genes that THIS test attempts to fix with tblastn + read consensus
 PHASE1_STOP_GENES = ["ND6", "CYTB"]
 PHASE1_MISSING    = []   # ND2 moved to Phase 2 (tblastn finds no hit for M. scutellaris ND2)
+# Genes fixed for length (INCOMPLETE → APPLIED); failure = wrong length or internal stops.
+# Expected lengths are M. capixaba ground-truth values, not reference species lengths.
+PHASE1_LENGTH_GENES: dict[str, tuple[int, int]] = {
+    "ND4": (1305, 434),  # bimodal NUMT filter: was REJECTED_HIGH_N; 434 aa is M. capixaba (ref has 435)
+}
 
 # Phase 2: known issues NOT counted as failures here
 PHASE2_NOTES = {
@@ -169,11 +177,10 @@ PHASE2_NOTES = {
     "COX1": "truncated annotation (702 nt vs ~1548 nt real); tblastn hit too short",
     "ND5":  "truncated annotation (1008 nt vs ~1743 nt real); same issue",
     "ND1":  "truncated (642 nt → 882 nt expected); needs tblastn + extended consensus",
-    "ND4":  "severely truncated (720 nt → 1305 nt expected); same issue",
     "ATP8": "not in problems list (insect ATP8 ~168 nt overlaps ATP6; ORF scan can't find it)",
 }
-EXACT_LEN = {"ND1": 882, "ND4": 1305}
-EXACT_AA  = {"ND1": 294, "ND4": 435}
+EXACT_LEN = {"ND1": 882}
+EXACT_AA  = {"ND1": 294}
 
 GENETIC_CODE = 5
 
@@ -187,7 +194,7 @@ for f in rec.features:
 phase1_failures = []
 phase2_notes    = []
 
-print("\n-- PHASE 1: stop fixes + ND2 recovery --")
+print("\n-- PHASE 1: stop fixes + length corrections --")
 for gene in PHASE1_STOP_GENES:
     if gene not in cds:
         phase1_failures.append(f"MISSING: {gene}")
@@ -214,6 +221,24 @@ for gene in PHASE1_MISSING:
         phase1_failures.append(f"STOPS: {gene} ({internal} stops)")
     print(f"{tag} {gene}: {len(nt)} nt / {len(aa)-1} aa / {internal} stops  (esperado ≈982 nt)")
 
+for gene, (exp_nt, exp_aa) in PHASE1_LENGTH_GENES.items():
+    if gene not in cds:
+        phase1_failures.append(f"MISSING: {gene}")
+        print(f"FAIL  {gene}: ausente")
+        continue
+    nt       = cds[gene].extract(rec.seq)
+    aa       = str(nt.translate(table=GENETIC_CODE, to_stop=False))
+    internal = aa[:-1].count("*")
+    ok_len   = len(nt) == exp_nt
+    ok_stops = internal == 0
+    tag      = "OK  " if (ok_len and ok_stops) else "FAIL"
+    if not ok_len:
+        phase1_failures.append(f"LENGTH: {gene} ({len(nt)} nt vs {exp_nt} nt expected)")
+    if not ok_stops:
+        phase1_failures.append(f"STOPS: {gene} ({internal} stops internos)")
+    print(f"{tag} {gene}: {len(nt)} nt / {len(aa)-1} aa / {internal} stops internos"
+          f"  (esperado {exp_nt} nt / {exp_aa} aa)")
+
 print("\n-- PHASE 2: comprimento / genes não tentados (informativo) --")
 for gene, note in PHASE2_NOTES.items():
     if gene not in cds:
@@ -233,7 +258,8 @@ for gene, note in PHASE2_NOTES.items():
 
 print("\n-- Demais genes (presença + stops) --")
 other_genes = [g for g in EXPECTED_13
-               if g not in PHASE1_STOP_GENES + PHASE1_MISSING + list(PHASE2_NOTES)]
+               if g not in PHASE1_STOP_GENES + PHASE1_MISSING
+               + list(PHASE1_LENGTH_GENES) + list(PHASE2_NOTES)]
 for gene in other_genes:
     if gene not in cds:
         print(f"NOTE  {gene}: ausente")
