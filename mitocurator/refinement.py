@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import pandas as pd
+from Bio import Align, SeqIO
 from Bio.Seq import Seq
 from Bio.SeqFeature import CompoundLocation, FeatureLocation, SeqFeature
 
@@ -158,6 +159,7 @@ def _context_features(record, start0, end0):
 
 def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
     min_nt = int(safe_get(config, ["refinement", "orf_min_nt"], 150))
+    genetic_code = int(safe_get(config, ["project", "genetic_code"], 5))
     exp = pd.read_csv(expected_gene_tsv, sep="\t")
     missing = exp[(exp["type"] == "CDS") & (exp["status"] == "MISSING")]["gene"].tolist()
     gaps = sorted(_intergenic_gaps(record), key=lambda g: g["length"], reverse=True)
@@ -186,7 +188,7 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
                             j += 3
                         orf_len = j - i
                         if orf_len >= min_nt:
-                            aa_len, internal, term = _translate_stop_metrics(nuc[i:j], code=5)
+                            aa_len, internal, term = _translate_stop_metrics(nuc[i:j], code=genetic_code)
                             top_for_gene.append((internal, -orf_len, strand, frame, i, j, aa_len, term, gap))
                         i = j + 3
         top_for_gene.sort(key=lambda x: (x[0], x[1]))
@@ -201,14 +203,13 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
                 end0 = (gap["start0"] + j) % len(record.seq)
             left, right = _context_features(record, min(start0, end0), max(start0, end0))
             context = f"gap_{gap['start0']+1}..{gap['end0']}|len={gap['length']}|AT={gap['at_content']}"
-            strong = (gene == "ND2" and ((gap["start0"] + 1) <= 5411 <= max(gap["end0"], 5411) or gap["length"] >= 500))
             rows.append({
                 "gene": gene, "candidate_id": f"{gene}_cand{cid}", "seqid": record.id,
                 "start": start0 + 1, "end": end0, "strand": strand, "length_nt": l, "length_aa": aa_len,
                 "frame": frame, "internal_stop_count": internal, "terminal_stop": term,
                 "overlaps_existing_feature": "no", "nearest_left_feature": left, "nearest_right_feature": right,
                 "region_context": context,
-                "decision_hint": "STRONG_CANDIDATE_REGION" if strong else ("CANDIDATE_REGION" if gap["length"] >= 500 else "LOW_PRIORITY"),
+                "decision_hint": "STRONG_CANDIDATE_REGION" if gap["length"] >= 500 else "LOW_PRIORITY",
                 "comment": "ORF scan on intergenic regions only; no automatic rescue applied",
             })
             cid += 1
@@ -217,9 +218,56 @@ def find_missing_cds_candidates(config, record, expected_gene_tsv, out_tsv):
     pd.DataFrame(rows, columns=cols).to_csv(out_tsv, sep="\t", index=False)
 
 
+def _load_ref_proteins(ref_gb: Path, genetic_code: int) -> dict[str, str]:
+    """Load reference protein sequences keyed by normalised gene name."""
+    proteins: dict[str, str] = {}
+    if not ref_gb.exists():
+        return proteins
+    for rec in SeqIO.parse(str(ref_gb), "genbank"):
+        for feat in rec.features:
+            if feat.type != "CDS":
+                continue
+            raw = (feat.qualifiers.get("gene") or feat.qualifiers.get("product") or [None])[0]
+            if raw is None:
+                continue
+            gene = _normalize_token(raw)
+            try:
+                proteins[gene] = str(
+                    Seq(str(feat.extract(rec.seq)).upper()).translate(table=genetic_code, to_stop=False)
+                ).rstrip("*")
+            except Exception:
+                continue
+    return proteins
+
+
+def _prot_coverage(nt: str, ref_aa: str, genetic_code: int) -> float | None:
+    """Global alignment coverage of ref_aa by the frame-0 translation of nt."""
+    try:
+        trimmed = nt[: (len(nt) // 3) * 3]
+        query_aa = str(Seq(trimmed).translate(table=genetic_code, to_stop=False)).rstrip("*")
+        if not query_aa or not ref_aa:
+            return None
+        aligner = Align.PairwiseAligner()
+        aligner.mode = "global"
+        aligner.substitution_matrix = Align.substitution_matrices.load("BLOSUM62")
+        aligner.open_gap_score = -11
+        aligner.extend_gap_score = -1
+        aln = next(aligner.align(ref_aa, query_aa))
+        aligned_ref = sum(e - s for s, e in aln.aligned[0])
+        return aligned_ref / len(ref_aa)
+    except Exception:
+        return None
+
+
 def find_cds_refinement_candidates(config, record, problematic_features_tsv, out_tsv):
     window = int(safe_get(config, ["refinement", "cds_refinement_window"], 300))
-    code = 5
+    code = int(safe_get(config, ["project", "genetic_code"], 5))
+    completeness_min_ratio = float(safe_get(config, ["local_consensus", "completeness_min_ratio"], 0.80))
+    completeness_min_cov   = float(safe_get(config, ["local_consensus", "completeness_min_cov"],   0.70))
+
+    ref_gb_path = safe_get(config, ["input", "reference_gb"], None)
+    ref_proteins = _load_ref_proteins(Path(ref_gb_path), code) if ref_gb_path else {}
+
     rows = []
     cds_feats = [f for f in record.features if f.type == "CDS"]
 
@@ -229,39 +277,102 @@ def find_cds_refinement_candidates(config, record, problematic_features_tsv, out
         strand = feat.location.strand or 1
         nt = str(feat.extract(record.seq)).upper()
         old_aa_len, old_internal, _ = _translate_stop_metrics(nt, code=code)
-        if old_internal == 0:
-            continue
 
-        best = None
-        for ds in range(-30, 31, 3):
-            for de in range(-30, 31, 3):
-                ns, ne = max(0, start0 + ds), min(len(record.seq), end0 + de)
-                if ne - ns < 90:
-                    continue
-                cand_nt = str(record.seq[ns:ne].reverse_complement() if strand == -1 else record.seq[ns:ne]).upper()
-                aa_len, internal, terminal = _translate_stop_metrics(cand_nt, code=code)
-                score = (internal, abs((ne - ns) - (end0 - start0)))
-                if best is None or score < best[0]:
-                    best = (score, ns, ne, aa_len, internal, terminal, ds, de)
+        if old_internal > 0:
+            # Existing logic: small window scan for a better boundary (±30 bp).
+            best = None
+            for ds in range(-30, 31, 3):
+                for de in range(-30, 31, 3):
+                    ns, ne = max(0, start0 + ds), min(len(record.seq), end0 + de)
+                    if ne - ns < 90:
+                        continue
+                    cand_nt = str(record.seq[ns:ne].reverse_complement() if strand == -1 else record.seq[ns:ne]).upper()
+                    aa_len, internal, terminal = _translate_stop_metrics(cand_nt, code=code)
+                    score = (internal, abs((ne - ns) - (end0 - start0)))
+                    if best is None or score < best[0]:
+                        best = (score, ns, ne, aa_len, internal, terminal, ds, de)
 
-        if best is None:
-            rows.append({"gene": gene, "old_start": start0 + 1, "old_end": end0, "old_strand": "+" if strand == 1 else "-", "old_length_nt": end0 - start0,
-                         "old_internal_stop_count": old_internal, "candidate_start": ".", "candidate_end": ".", "candidate_strand": ".", "candidate_length_nt": ".", "candidate_length_aa": ".", "candidate_frame": ".", "candidate_internal_stop_count": ".", "candidate_terminal_stop": ".", "delta_start": ".", "delta_end": ".", "decision_hint": "NO_BETTER_CANDIDATE", "comment": "No alternative candidate in window search"})
-            continue
+            if best is None:
+                rows.append({
+                    "gene": gene, "old_start": start0 + 1, "old_end": end0,
+                    "old_strand": "+" if strand == 1 else "-", "old_length_nt": end0 - start0,
+                    "old_internal_stop_count": old_internal,
+                    "candidate_start": ".", "candidate_end": ".", "candidate_strand": ".",
+                    "candidate_length_nt": ".", "candidate_length_aa": ".", "candidate_frame": ".",
+                    "candidate_internal_stop_count": ".", "candidate_terminal_stop": ".",
+                    "delta_start": ".", "delta_end": ".",
+                    "decision_hint": "NO_BETTER_CANDIDATE",
+                    "comment": "No alternative candidate in window search",
+                    "problem_reason": "INTERNAL_STOP",
+                })
+                continue
 
-        _, ns, ne, aa_len, internal, terminal, ds, de = best
-        hint = "NO_BETTER_CANDIDATE"
-        if internal < old_internal:
-            hint = "SUGGEST_REVIEW"
-        if internal == 0 and abs((ne - ns) - (end0 - start0)) <= window:
-            hint = "STRONG_CANDIDATE"
-        rows.append({"gene": gene, "old_start": start0 + 1, "old_end": end0, "old_strand": "+" if strand == 1 else "-", "old_length_nt": end0 - start0,
-                     "old_internal_stop_count": old_internal, "candidate_start": ns + 1, "candidate_end": ne, "candidate_strand": "+" if strand == 1 else "-",
-                     "candidate_length_nt": ne - ns, "candidate_length_aa": aa_len, "candidate_frame": (ns % 3), "candidate_internal_stop_count": internal,
-                     "candidate_terminal_stop": terminal, "delta_start": ds, "delta_end": de, "decision_hint": hint,
-                     "comment": "Coordinate-only candidate scan; no GenBank changes applied"})
+            _, ns, ne, aa_len, internal, terminal, ds, de = best
+            hint = "NO_BETTER_CANDIDATE"
+            if internal < old_internal:
+                hint = "SUGGEST_REVIEW"
+            if internal == 0 and abs((ne - ns) - (end0 - start0)) <= window:
+                hint = "STRONG_CANDIDATE"
+            rows.append({
+                "gene": gene, "old_start": start0 + 1, "old_end": end0,
+                "old_strand": "+" if strand == 1 else "-", "old_length_nt": end0 - start0,
+                "old_internal_stop_count": old_internal,
+                "candidate_start": ns + 1, "candidate_end": ne,
+                "candidate_strand": "+" if strand == 1 else "-",
+                "candidate_length_nt": ne - ns, "candidate_length_aa": aa_len,
+                "candidate_frame": (ns % 3), "candidate_internal_stop_count": internal,
+                "candidate_terminal_stop": terminal, "delta_start": ds, "delta_end": de,
+                "decision_hint": hint,
+                "comment": "Coordinate-only candidate scan; no GenBank changes applied",
+                "problem_reason": "INTERNAL_STOP",
+            })
 
-    cols = ["gene", "old_start", "old_end", "old_strand", "old_length_nt", "old_internal_stop_count", "candidate_start", "candidate_end", "candidate_strand", "candidate_length_nt", "candidate_length_aa", "candidate_frame", "candidate_internal_stop_count", "candidate_terminal_stop", "delta_start", "delta_end", "decision_hint", "comment"]
+        else:
+            # 0 internal stops — check completeness against the reference.
+            if gene not in ref_proteins:
+                continue
+            ref_aa = ref_proteins[gene]
+            ref_nt_len = len(ref_aa) * 3
+            if ref_nt_len == 0:
+                continue
+            length_ratio = len(nt) / ref_nt_len
+            cov = _prot_coverage(nt, ref_aa, code)
+
+            problem_reason = None
+            if length_ratio < completeness_min_ratio:
+                problem_reason = "INCOMPLETE_LENGTH"
+            elif cov is not None and cov < completeness_min_cov:
+                problem_reason = "INCOMPLETE_COVERAGE"
+
+            if problem_reason is None:
+                continue
+
+            comment = f"completeness: length_ratio={length_ratio:.3f}"
+            if cov is not None:
+                comment += f" prot_cov={cov:.3f}"
+            comment += "; tblastn step in local_consensus will refine coordinates"
+
+            rows.append({
+                "gene": gene, "old_start": start0 + 1, "old_end": end0,
+                "old_strand": "+" if strand == 1 else "-", "old_length_nt": end0 - start0,
+                "old_internal_stop_count": 0,
+                "candidate_start": start0 + 1, "candidate_end": end0,
+                "candidate_strand": "+" if strand == 1 else "-",
+                "candidate_length_nt": end0 - start0, "candidate_length_aa": old_aa_len,
+                "candidate_frame": 0, "candidate_internal_stop_count": 0,
+                "candidate_terminal_stop": ".", "delta_start": 0, "delta_end": 0,
+                "decision_hint": "INCOMPLETE",
+                "comment": comment,
+                "problem_reason": problem_reason,
+            })
+
+    cols = [
+        "gene", "old_start", "old_end", "old_strand", "old_length_nt",
+        "old_internal_stop_count", "candidate_start", "candidate_end", "candidate_strand",
+        "candidate_length_nt", "candidate_length_aa", "candidate_frame",
+        "candidate_internal_stop_count", "candidate_terminal_stop",
+        "delta_start", "delta_end", "decision_hint", "comment", "problem_reason",
+    ]
     pd.DataFrame(rows, columns=cols).to_csv(out_tsv, sep="\t", index=False)
 
 
