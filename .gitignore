@@ -45,3 +45,11 @@ mitocurator_output/
 
 # User config with absolute paths
 config.yaml
+
+# Build artifacts
+mitocurator.egg-info/
+
+# Test outputs
+output_test/
+session_summary.md
+diff.txt
