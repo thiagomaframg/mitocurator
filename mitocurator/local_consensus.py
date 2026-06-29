@@ -80,6 +80,8 @@ def repair_cds_local_consensus(
     length_tol_frac   = float(safe_get(lc,     ["length_tol_frac"],         0.15))
     max_stops_in_read = int(  safe_get(lc,     ["max_stops_in_read"],        0))
     min_identity_pct  = float(safe_get(lc,     ["min_identity_pct"],        70.0))
+    min_read_pident   = float(safe_get(lc,     ["min_read_pident"],         75.0))
+    min_bimodal_gap   = float(safe_get(lc,     ["min_bimodal_gap"],          1.0))
     genetic_code      = int(  safe_get(config, ["project", "genetic_code"],  5))
 
     reads_cfg   = safe_get(config, ["reads"], {})
@@ -181,8 +183,11 @@ def repair_cds_local_consensus(
         )
         cmds.append(tblastn_reads_cmd)
 
-        # ── [5] extract aligned regions from reads ────────────────────────────
-        hit_regions = _extract_hit_regions(reads_fa, hits_tsv, len(prot_seq))
+        # ── [5] pident filter + extract aligned regions from reads ────────────
+        pident_cutoff, bimodal_pident, pident_info = _find_pident_cutoff(
+            hits_tsv, min_read_pident, min_bimodal_gap
+        )
+        hit_regions = _extract_hit_regions(reads_fa, hits_tsv, len(prot_seq), pident_cutoff)
         n_hits = len(hit_regions)
 
         if n_hits == 0:
@@ -192,6 +197,7 @@ def repair_cds_local_consensus(
                                     "region": region_label,
                                     "reads_fetched_from_bam": n_reads_fetched,
                                     "reads_with_tblastn_hit": 0,
+                                    **pident_info,
                                 })
             _append_audit(audit_log, entry)
             audit_entries.append(entry)
@@ -210,6 +216,7 @@ def repair_cds_local_consensus(
                                     "reads_with_tblastn_hit": n_hits,
                                     "reads_passing_stop_filter": 0,
                                     "max_stops_in_read": max_stops_in_read,
+                                    **pident_info,
                                 })
             _append_audit(audit_log, entry)
             audit_entries.append(entry)
@@ -226,6 +233,7 @@ def repair_cds_local_consensus(
                                     "reads_fetched_from_bam": n_reads_fetched,
                                     "reads_with_tblastn_hit": n_hits,
                                     "reads_passing_stop_filter": n_filtered,
+                                    **pident_info,
                                 })
             _append_audit(audit_log, entry)
             audit_entries.append(entry)
@@ -251,6 +259,7 @@ def repair_cds_local_consensus(
                                     "consensus_n_fraction": val_raw["n_fraction"],
                                     "ref_protein_identity_pct": val_raw.get("identity_pct"),
                                     "ref_protein_coverage_pct": val_raw.get("coverage_pct"),
+                                    **pident_info,
                                 })
             _append_audit(audit_log, entry)
             audit_entries.append(entry)
@@ -306,6 +315,7 @@ def repair_cds_local_consensus(
                 "assembly_coords_confirmed": coords_confirmed,
                 "ref_protein_identity_pct": val.get("identity_pct"),
                 "ref_protein_coverage_pct": val.get("coverage_pct"),
+                **pident_info,
             },
             candidate={
                 "sequence_nt": best_seq if _will_write else None,
@@ -414,6 +424,91 @@ def _extract_reads_from_bam(bam_path: Path, ref_name: str, out_fa: Path) -> int:
     return count
 
 
+def _find_pident_cutoff(
+    hits_tsv: Path,
+    min_read_pident: float,
+    min_bimodal_gap: float = 1.0,
+    min_cluster_frac: float = 0.05,
+    min_cluster_abs: int = 5,
+) -> tuple[float, bool, dict]:
+    """Detect bimodality in tblastn-vs-reads pident distribution.
+
+    Returns (cutoff, bimodal_detected, info_dict).
+
+    Strategy: find the largest gap between consecutive sorted pident values,
+    requiring min(n_low, n_high) ≥ max(min_cluster_abs, min_cluster_frac * n_total)
+    on both sides. The cluster-size requirement is critical: it prevents the
+    common case of a handful of very-low-identity reads (off-target, ancient NUMT)
+    creating a large gap at the bottom tail from being selected over the
+    biologically meaningful gap that separates a NUMT cluster from true
+    mitochondrial reads.
+
+    If bimodal and cutoff > min_read_pident: use midpoint of the gap.
+    Otherwise: fall back to min_read_pident (config floor, default 75%).
+
+    Default min_read_pident = 75%: corresponds to roughly family-level divergence
+    in metazoan mitochondrial proteins. Any read with pident < 75% to a same-genus
+    reference is unlikely to represent either the true mito sequence or a recent
+    NUMT; such reads more probably arise from non-specific mapping or very ancient
+    insertions. Bimodality detection handles the 75–95% range where NUMT and mito
+    populations can co-occur and must be separated explicitly.
+    """
+    pidents: list[float] = []
+    try:
+        with open(hits_tsv) as fh:
+            for line in fh:
+                if not line.strip() or line.startswith('#'):
+                    continue
+                parts = line.split('\t')
+                if len(parts) < 3:
+                    continue
+                try:
+                    pidents.append(float(parts[2]))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        return min_read_pident, False, {}
+
+    n = len(pidents)
+    min_each = max(min_cluster_abs, int(n * min_cluster_frac))
+
+    if n < 2 * min_each:
+        return min_read_pident, False, {}
+
+    sorted_p = sorted(pidents)
+
+    best_gap = 0.0
+    best_idx = -1
+    for i in range(min_each - 1, n - min_each):
+        gap = sorted_p[i + 1] - sorted_p[i]
+        if gap > best_gap:
+            best_gap = gap
+            best_idx = i
+
+    if best_idx >= 0 and best_gap >= min_bimodal_gap:
+        cutoff = (sorted_p[best_idx] + sorted_p[best_idx + 1]) / 2.0
+        if cutoff > min_read_pident:
+            low  = sorted_p[: best_idx + 1]
+            high = sorted_p[best_idx + 1 :]
+            return cutoff, True, {
+                "pident_cutoff_method":       "bimodal_gap",
+                "reads_pident_cutoff":        round(cutoff, 1),
+                "pident_gap_size_pct":        round(best_gap, 2),
+                "reads_discarded_low_pident": len(low),
+                "pident_low_cluster_range":   [round(min(low), 1), round(max(low), 1)],
+                "pident_low_cluster_mean":    round(sum(low) / len(low), 1),
+                "numt_suspected":             True,
+            }
+
+    n_discarded = sum(1 for p in pidents if p < min_read_pident)
+    return min_read_pident, False, {
+        "pident_cutoff_method":       "config_floor",
+        "reads_pident_cutoff":        round(min_read_pident, 1),
+        "pident_max_gap_pct":         round(best_gap, 2),
+        "reads_discarded_low_pident": n_discarded,
+    }
+
+
 def _run_tblastn_vs_reads(prot_fa: Path, reads_fa: Path, genetic_code: int,
                            out_tsv: Path, evalue: float) -> str:
     # -num_threads is silently ignored by tblastn when -subject is specified (known limitation).
@@ -425,13 +520,16 @@ def _run_tblastn_vs_reads(prot_fa: Path, reads_fa: Path, genetic_code: int,
     return cmd
 
 
-def _extract_hit_regions(reads_fa: Path, hits_tsv: Path, ref_prot_len: int) -> dict[str, str]:
+def _extract_hit_regions(
+    reads_fa: Path, hits_tsv: Path, ref_prot_len: int, min_pident: float = 0.0
+) -> dict[str, str]:
     """Extract full expected CDS from each read with a tblastn hit.
 
     Uses qstart/qend to extend the tblastn hit window to cover the full expected
     CDS length (same extension logic as _best_tblastn_coords): partial hits still
     recover the complete gene region from the read. For minus-strand hits
     (sstart > send), returns the reverse complement.
+    Reads with pident < min_pident are excluded before extraction.
     Returns {read_id: coding_subseq}.
     """
     reads: dict[str, str] = {
@@ -449,6 +547,9 @@ def _extract_hit_regions(reads_fa: Path, hits_tsv: Path, ref_prot_len: int) -> d
                 if len(parts) < 10:
                     continue
                 read_id  = parts[1]
+                pident   = float(parts[2])
+                if pident < min_pident:
+                    continue
                 qstart   = int(parts[4])
                 qend     = int(parts[5])
                 sstart   = int(parts[6])
