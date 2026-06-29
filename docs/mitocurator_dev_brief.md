@@ -128,6 +128,13 @@ local_consensus:
   max_n_fraction: 0.05           # fração máxima de Ns no candidato para aceitar
   completeness_min_ratio: 0.80   # comprimento mínimo vs. referência
   completeness_min_cov: 0.70     # cobertura de aa mínima no alinhamento vs. ref
+  min_read_pident: 75.0          # piso de identidade por read no tblastn-vs-reads
+                                 # (usado quando bimodalidade não é detectada)
+                                 # Justificativa: 75% ~ divergência de família em proteínas
+                                 # mitocondriais; reads abaixo disso vs. referência do mesmo
+                                 # gênero são improváveis de ser mito real ou NUMT recente.
+  min_bimodal_gap: 1.0           # gap mínimo (pp) para declarar bimodalidade na
+                                 # distribuição de pident e cortar automaticamente no vale
   threads: 8
 
 reads:
@@ -231,8 +238,23 @@ Campos obrigatórios: `timestamp`, `gene`, `problem`, `evidence.type`,
 `evidence.stop_codons_before`, `evidence.stop_codons_after`, `candidate`,
 `action`, `tools`, `commands`.
 
-Valores de `action`: `SUGGEST`, `APPLIED`, `REJECTED_STOPS_REMAIN`,
-`REJECTED_HIGH_N`, `SKIPPED_NO_REFERENCE`, `SKIPPED_NO_READS`.
+Valores de `action`:
+
+| Valor | Significado |
+|-------|-------------|
+| `APPLIED` | Candidato aceito e aplicado ao GenBank in-place |
+| `SUGGEST` | Candidato aceito (mode=suggest), não aplicado |
+| `REJECTED_STOPS_REMAIN` | Consenso final ainda contém stops internos |
+| `REJECTED_HIGH_N` | Fração de Ns no candidato > `max_n_fraction` |
+| `REJECTED_LOW_IDENTITY` | Identidade proteica vs. referência < `min_identity_pct` |
+| `REJECTED_NO_BOUNDARY_FIT` | Nenhuma janela no boundary scan satisfaz os critérios |
+| `REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY` | tblastn contra o assembly não confirma coordenadas |
+| `SKIPPED_NO_REFERENCE` | Gene ausente na proteína de referência |
+| `SKIPPED_NO_READS` | Nenhum arquivo de reads configurado |
+| `SKIPPED_NO_READS_IN_BAM` | BAM filtrado contém 0 reads na região |
+| `SKIPPED_NO_TBLASTN_HIT_IN_READS` | Nenhuma read passou o filtro de pident |
+| `SKIPPED_NO_READS_PASS_FILTER` | Nenhuma read passou o filtro de stops por frame |
+| `SKIPPED_NO_CONSENSUS` | MAFFT não produziu consenso válido |
 
 ---
 
@@ -269,30 +291,54 @@ backends `samtools mpileup` de `targeted_consensus.py`.
 A partir do arquivo pré-correção, após `mitocurator run` com `local_consensus`
 ativo (mode=apply):
 
-| Gene | nt   | aa  | Stops internos |
-|------|------|-----|----------------|
-| ND1  | 882  | 294 | 0              |
-| CYTB | 1143 | 381 | 0              |
-| ND4  | 1305 | 435 | 0              |
-| ND2  | ≈982 | —   | 0              |
+| Gene | nt   | aa  | Stops internos | Status atual |
+|------|------|-----|----------------|--------------|
+| ND6  | 522  | 173 | 0              | APPLIED ✓   |
+| CYTB | 1143 | 380 | 0              | APPLIED ✓   |
+| COX1 | 1560 | 519 | 0              | APPLIED ✓ (anotação truncada — 702 nt → 1560 nt) |
+| COX3 | 777  | 258 | 0              | APPLIED ✓ (anotação truncada — 477 nt → 777 nt) |
+| ND1  | 882  | 293 | 0              | APPLIED ✓ (start codon canônico preferido — ATT/ATA ignorados) |
+| ND4  | 1305 | 434 | 0              | APPLIED ✓ (filtro NUMT bimodal: 797 reads @88% descartadas) |
+| ND5  | 1617 | 538 | 0              | APPLIED ✓ (anotação truncada) |
+| ND2  | —    | —   | —              | REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY (M. scutellaris ND2 divergente demais) |
+
+> **Nota ND4:** o aa esperado é 434 (*M. capixaba*), não 435 — a referência *M. scutellaris*
+> tem 435 aa. O pipeline usa o comprimento da referência apenas para localizar a região e
+> guiar o boundary scan; o comprimento final reflete a sequência real da espécie em curadoria.
 
 Mitogenoma final: **19.526 bp**, circular, **13 CDS** sem stops internos,
 **2 rRNA**, **22 tRNA** (anotação MiTFi).
 
+> O comprimento 19.526 bp é específico do caso *M. capixaba* e não deve ser usado como
+> critério de sucesso em espécies novas.
+
 ### Problemas no arquivo de entrada que o módulo deve corrigir
 
-| Gene | Tipo de problema | Stops internos (entrada) |
-|------|-----------------|--------------------------|
-| COX1 | PROBLEM_INTERNAL_STOP | 2 |
-| ND6  | PROBLEM_INTERNAL_STOP | 5 |
-| CYTB | PROBLEM_INTERNAL_STOP | 1 |
-| ND5  | PROBLEM_INTERNAL_STOP | 4 |
-| ATP8 | MISSING | — |
-| ND2  | MISSING | — |
+| Gene | Tipo de problema | Stops internos (entrada) | Resultado |
+|------|-----------------|--------------------------|-----------|
+| COX1 | INTERNAL_STOP | 2 | APPLIED |
+| ND6  | INTERNAL_STOP | 5 | APPLIED |
+| CYTB | INTERNAL_STOP | 1 | APPLIED |
+| ND5  | INTERNAL_STOP | 4 | APPLIED |
+| ND3  | INCOMPLETE_LENGTH | 0 | REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY (*M. scutellaris* ND3 divergente) |
+| COX3 | INCOMPLETE_LENGTH | 0 | APPLIED |
+| ND1  | INCOMPLETE_LENGTH | 0 | APPLIED |
+| ND4  | INCOMPLETE_LENGTH | 0 | APPLIED (ver nota NUMT abaixo) |
+| ATP8 | MISSING | — | não tentado (insect ATP8 ~168 nt, sobrepõe ATP6; ORF scan não encontra) |
+| ND2  | MISSING | — | REJECTED_TBLASTN_NO_HIT_IN_ASSEMBLY (*M. scutellaris* ND2 divergente demais) |
 
-ATP8 e ND2 estavam presentes nas reads mas ausentes no consenso inicial — o
-módulo deve recuperá-los mapeando contra a sequência de referência de
-*M. scutellaris* e construindo consenso local.
+#### Caso especial: ND4 e contaminação por NUMT
+
+No dataset *M. capixaba*, a região do ND4 contém leituras de **dois grupos**:
+
+- **Grupo NUMT** (~797 reads, pident médio 87.9% vs. *M. scutellaris*): cópia nuclear
+  divergida; internamente consistente mas com ~9% de divergência em relação ao mito real.
+- **Grupo mito** (~82 reads, pident ~98%): reads do mitogenoma real.
+
+Sem filtro, a mistura produz 79 posições com frequência ~50/50 → Ns no consenso →
+`REJECTED_HIGH_N`. A função `_find_pident_cutoff()` detecta a bimodalidade (gap de 1.05%
+entre 93.9% e 94.9%) e corta automaticamente em 94.4%, descartando o cluster NUMT.
+O resultado com apenas as 82 reads mitocondriais: 1305 nt / 434 aa / 0 stops / 0 Ns.
 
 ### Critério de aprovação do teste
 
@@ -305,7 +351,7 @@ from Bio import SeqIO
 EXPECTED_13  = ["ATP6","ATP8","COX1","COX2","COX3","CYTB",
                 "ND1","ND2","ND3","ND4","ND4L","ND5","ND6"]
 EXACT_LEN    = {"ND1": 882,  "CYTB": 1143, "ND4": 1305}
-EXACT_AA     = {"ND1": 294,  "CYTB": 381,  "ND4": 435}
+EXACT_AA     = {"ND1": 293,  "CYTB": 380,  "ND4": 434}  # valores M. capixaba, não M. scutellaris
 GENETIC_CODE = 5  # ler de config na prática
 
 rec = next(SeqIO.parse("output/final.gb", "genbank"))
