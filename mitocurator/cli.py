@@ -1,11 +1,15 @@
 from __future__ import annotations
 import argparse
 from pathlib import Path
+import pandas as pd
 from .utils import load_config, ensure_dir, safe_get
 from .check_tools import check_tools
 from .gene_qc import diagnose
 from .rotate import rotate_to_gene
 from .refinement import refine_annotation
+from .local_consensus import repair_cds_local_consensus
+from .io import read_record, write_record
+
 
 def outdir_from_config(config: dict) -> Path:
     outdir = safe_get(config, ["output", "outdir"], None)
@@ -14,11 +18,40 @@ def outdir_from_config(config: dict) -> Path:
         outdir = str(Path.cwd() / project)
     return ensure_dir(outdir)
 
+
+def _load_problems(ref_dir: Path) -> list[dict]:
+    """Build problems list from refinement TSVs for repair_cds_local_consensus.
+
+    Sources (never overlap — cds_tsv covers annotated genes, miss_tsv covers absent genes):
+    - cds_refinement_candidates.tsv: all rows (INTERNAL_STOP, INCOMPLETE_LENGTH,
+      INCOMPLETE_COVERAGE). Column aliases old_start/old_end/old_strand/
+      old_internal_stop_count are resolved inside repair_cds_local_consensus.
+    - missing_gene_candidates.tsv: top-1 candidate per gene (TSV is already
+      sorted by internal_stop_count ASC, length_nt DESC).
+    """
+    problems: list[dict] = []
+
+    cds_tsv = ref_dir / "cds_refinement_candidates.tsv"
+    if cds_tsv.exists():
+        df = pd.read_csv(cds_tsv, sep="\t")
+        if not df.empty:
+            problems.extend(df.to_dict("records"))
+
+    miss_tsv = ref_dir / "missing_gene_candidates.tsv"
+    if miss_tsv.exists():
+        df = pd.read_csv(miss_tsv, sep="\t")
+        if not df.empty:
+            problems.extend(df.drop_duplicates(subset="gene", keep="first").to_dict("records"))
+
+    return problems
+
+
 def cmd_check_tools(args):
     config = load_config(args.config)
     outdir = ensure_dir(outdir_from_config(config) / "00_logs")
     outfile = check_tools(config, outdir)
     print(f"Tool check written to: {outfile}")
+
 
 def cmd_diagnose(args):
     config = load_config(args.config)
@@ -26,11 +59,13 @@ def cmd_diagnose(args):
     diagnose(config, outdir)
     print(f"Diagnostic files written to: {outdir}")
 
+
 def cmd_rotate(args):
     config = load_config(args.config)
     outdir = ensure_dir(outdir_from_config(config) / "04_rotation")
     out = rotate_to_gene(config, outdir)
     print(f"Rotated GenBank written to: {out}")
+
 
 def cmd_run(args):
     config = load_config(args.config)
@@ -39,33 +74,61 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/5] Tool check: {tc}")
+    print(f"[1/6] Tool check: {tc}")
 
     annotated_gb = config["input"]["mitogenome"]
-    print(f"[2/5] MitoFinder annotation: {annotated_gb}")
+    print(f"[2/6] MitoFinder annotation: {annotated_gb}")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
+    ref_dir = None
     if refinement_enabled:
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
-        print(f"[3/5] Annotation refinement: {refined_gb}")
+        print(f"[3/6] Annotation refinement: {refined_gb}")
     else:
-        print("[3/5] Annotation refinement: disabled")
+        print("[3/6] Annotation refinement: disabled")
+
+    # [4/6] Local consensus repair (suggest → review audit_log → re-run with apply).
+    # mode=suggest: only candidate FASTAs and audit_log written; record unchanged.
+    # mode=apply:   record modified in-place; repaired.gb written and passed downstream.
+    lc_enabled = bool(safe_get(config, ["local_consensus", "enabled"], True))
+    lc_mode = safe_get(config, ["local_consensus", "mode"], "suggest")
+    lc_gb = refined_gb
+    lc_dir = None
+    if lc_enabled:
+        if ref_dir is None:
+            print("[4/6] Local consensus: skipped (refinement disabled — TSVs unavailable)")
+        else:
+            problems = _load_problems(ref_dir)
+            if not problems:
+                print("[4/6] Local consensus: skipped (no problems found in refinement TSVs)")
+            else:
+                step_name = safe_get(config, ["output", "step_dirs", "local_consensus"],
+                                     "06_local_consensus")
+                lc_dir = ensure_dir(root / step_name)
+                record, fmt = read_record(refined_gb)
+                repair_cds_local_consensus(config, record, problems, root, mode=lc_mode)
+                if lc_mode == "apply":
+                    lc_gb = lc_dir / "repaired.gb"
+                    write_record(record, lc_gb, fmt)
+                print(f"[4/6] Local consensus ({lc_mode}): {lc_dir}")
+    else:
+        print("[4/6] Local consensus: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
-        config["input"]["mitogenome"] = str(refined_gb)
+        config["input"]["mitogenome"] = str(lc_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[4/5] Rotation: {rotated_input}")
+        print(f"[5/6] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
     except Exception as e:
-        print(f"[4/5] Rotation skipped/failed: {e}")
+        print(f"[5/6] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for diagnosis.")
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[5/5] Diagnosis: {qc_dir}")
+    print(f"[6/6] Diagnosis: {qc_dir}")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
@@ -74,6 +137,11 @@ def cmd_run(args):
     print(f"  {root / '05_refinement' / 'added_features.tsv'}")
     print(f"  {root / '05_refinement' / 'missing_gene_candidates.tsv'}")
     print(f"  {root / '05_refinement' / 'cds_refinement_candidates.tsv'}")
+    if lc_dir is not None:
+        print(f"  {lc_dir / 'audit_log.jsonl'}")
+        print(f"  {lc_dir / 'summary.tsv'}")
+        if lc_mode == "apply":
+            print(f"  {lc_dir / 'repaired.gb'}")
     print(f"  {qc_dir / 'gene_qc.tsv'}")
     print(f"  {qc_dir / 'problematic_features.tsv'}")
     print(f"  {qc_dir / 'intergenic_regions.tsv'}")

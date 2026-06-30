@@ -27,6 +27,10 @@ output:
   outdir: /full/path/to/mitocurator_output
 
 reads:
+  # Tecnologia das reads longas usadas para consenso local.
+  # Valores aceitos: hifi | ont | clr | illumina
+  # Define o preset do minimap2: hifi→map-hifi, ont→map-ont, clr→map-pb, illumina→sr
+  technology: hifi
   hifi:
   pacbio_clr:
   ont:
@@ -104,3 +108,32 @@ refinement:
   find_cds_refinement_candidates: true
   orf_min_nt: 150
   cds_refinement_window: 300
+
+local_consensus:
+  # Habilitar etapa de reparo por consenso local de reads.
+  enabled: true
+
+  # Modo de operação:
+  #   suggest  (default) — escreve candidatos em FASTA + audit log; GenBank inalterado.
+  #   diagnose — apenas audit log; nenhum FASTA de candidato gerado.
+  #   apply    — aplica candidatos aceitos ao GenBank; gera repaired.gb.
+  # Fluxo recomendado: rodar suggest, revisar audit_log.jsonl, então rodar apply.
+  mode: suggest
+
+  flank_bp: 200                  # flancos adicionados à região do gene para mapeamento
+  min_mq: 20                     # mapping quality mínimo (samtools view -q)
+  min_depth: 5                   # profundidade mínima para chamar base; abaixo → N
+  maj_freq: 0.70                 # frequência mínima do alelo majoritário por coluna
+  mafft_max_reads: 500           # máximo de reads passadas ao MAFFT (subsample)
+  mafft_gap_col_threshold: 0.50  # fração de gaps para deletar coluna (frameshift)
+  max_n_fraction: 0.05           # fração máxima de Ns no candidato para aceitar
+  completeness_min_ratio: 0.80   # comprimento mínimo vs. referência
+  completeness_min_cov: 0.70     # cobertura de aa mínima no alinhamento vs. ref
+  min_identity_pct: 70.0         # identidade proteica mínima vs. referência para aceitar
+  min_read_pident: 75.0          # piso de identidade tblastn por read (~divergência de família)
+  min_bimodal_gap: 1.0           # gap mínimo (pp) para declarar bimodalidade (filtro NUMT)
+  tblastn_evalue: 1e-5
+  shift_nt: 60                   # janela de busca de boundary (±shift_nt nt em cada extremo)
+  length_tol_frac: 0.15          # tolerância de comprimento vs. referência no boundary scan
+  max_stops_in_read: 0           # stops internos tolerados por read no filtro pré-MAFFT
+  threads: 8
