@@ -10,6 +10,7 @@ from .refinement import refine_annotation
 from .local_consensus import repair_cds_local_consensus
 from .io import read_record, write_record
 from .final_molecule_preparation import run_final_molecule_preparation
+from .polish import run_global_polish
 
 
 def outdir_from_config(config: dict) -> Path:
@@ -68,6 +69,20 @@ def cmd_rotate(args):
     print(f"Rotated GenBank written to: {out}")
 
 
+def cmd_polish(args):
+    config = load_config(args.config)
+    assembly = Path(args.input) if args.input else Path(
+        safe_get(config, ["polish", "assembly_fasta"], "") or ""
+    )
+    if not assembly or not assembly.exists():
+        raise SystemExit(
+            "Assembly FASTA not found. Provide --input or set polish.assembly_fasta in config."
+        )
+    root = outdir_from_config(config)
+    out = run_global_polish(config, assembly, root)
+    print(f"Polished FASTA written to: {out}")
+
+
 def cmd_final_molecule(args):
     config = load_config(args.config)
     input_gb = Path(config["input"]["mitogenome"])
@@ -84,10 +99,31 @@ def cmd_run(args):
 
     logs = ensure_dir(root / "00_logs")
     tc = check_tools(config, logs)
-    print(f"[1/7] Tool check: {tc}")
+    print(f"[1/8] Tool check: {tc}")
+
+    # [2/8] Global polish — optional; runs on raw assembly FASTA before annotation.
+    # MitoFinder must be re-run on the polished FASTA (external step) before cmd_run
+    # can proceed to refinement. If polish is disabled or assembly_fasta is absent,
+    # this step is skipped and cmd_run continues from config["input"]["mitogenome"].
+    polish_enabled = bool(safe_get(config, ["polish", "enabled"], False))
+    polish_dir = None
+    if polish_enabled:
+        assembly_fasta_path = safe_get(config, ["polish", "assembly_fasta"], None)
+        if assembly_fasta_path and Path(assembly_fasta_path).exists():
+            polish_dir = root
+            polished = run_global_polish(config, Path(assembly_fasta_path), root)
+            print(f"[2/8] Polish: {polished}")
+            print(
+                "      Next: annotate the polished FASTA with MitoFinder, then set "
+                "input.mitogenome to the resulting GenBank and re-run."
+            )
+        else:
+            print("[2/8] Polish: skipped (polish.assembly_fasta not set or not found)")
+    else:
+        print("[2/8] Polish: disabled")
 
     annotated_gb = config["input"]["mitogenome"]
-    print(f"[2/7] MitoFinder annotation: {annotated_gb}")
+    print(f"[3/8] MitoFinder annotation: {annotated_gb}")
 
     refinement_enabled = bool(safe_get(config, ["refinement", "enabled"], True))
     refined_gb = annotated_gb
@@ -95,11 +131,11 @@ def cmd_run(args):
     if refinement_enabled:
         ref_dir = ensure_dir(root / "05_refinement")
         refined_gb = refine_annotation(config, annotated_gb, ref_dir)
-        print(f"[3/7] Annotation refinement: {refined_gb}")
+        print(f"[4/8] Annotation refinement: {refined_gb}")
     else:
-        print("[3/7] Annotation refinement: disabled")
+        print("[4/8] Annotation refinement: disabled")
 
-    # [4/7] Local consensus repair (suggest → review audit_log → re-run with apply).
+    # [5/8] Local consensus repair (suggest → review audit_log → re-run with apply).
     # mode=suggest: only candidate FASTAs and audit_log written; record unchanged.
     # mode=apply:   record modified in-place; repaired.gb written and passed downstream.
     lc_enabled = bool(safe_get(config, ["local_consensus", "enabled"], True))
@@ -108,11 +144,11 @@ def cmd_run(args):
     lc_dir = None
     if lc_enabled:
         if ref_dir is None:
-            print("[4/7] Local consensus: skipped (refinement disabled — TSVs unavailable)")
+            print("[5/8] Local consensus: skipped (refinement disabled — TSVs unavailable)")
         else:
             problems = _load_problems(ref_dir)
             if not problems:
-                print("[4/7] Local consensus: skipped (no problems found in refinement TSVs)")
+                print("[5/8] Local consensus: skipped (no problems found in refinement TSVs)")
             else:
                 step_name = safe_get(config, ["output", "step_dirs", "local_consensus"],
                                      "06_local_consensus")
@@ -122,23 +158,23 @@ def cmd_run(args):
                 if lc_mode == "apply":
                     lc_gb = lc_dir / "repaired.gb"
                     write_record(record, lc_gb, fmt)
-                print(f"[4/7] Local consensus ({lc_mode}): {lc_dir}")
+                print(f"[5/8] Local consensus ({lc_mode}): {lc_dir}")
     else:
-        print("[4/7] Local consensus: disabled")
+        print("[5/8] Local consensus: disabled")
 
     try:
         rot_dir = ensure_dir(root / "04_rotation")
         config["input"]["mitogenome"] = str(lc_gb)
         rotated_input = rotate_to_gene(config, rot_dir)
-        print(f"[5/7] Rotation: {rotated_input}")
+        print(f"[6/8] Rotation: {rotated_input}")
         config["input"]["mitogenome"] = str(rotated_input)
     except Exception as e:
-        print(f"[5/7] Rotation skipped/failed: {e}")
+        print(f"[6/8] Rotation skipped/failed: {e}")
         print("      Proceeding with current annotation for diagnosis.")
 
     qc_dir = ensure_dir(root / "07_gene_qc")
     diagnose(config, qc_dir)
-    print(f"[6/7] Diagnosis: {qc_dir}")
+    print(f"[7/8] Diagnosis: {qc_dir}")
 
     fm_dir = None
     fm_enabled = bool(safe_get(config, ["final_molecule", "enabled"], True))
@@ -156,12 +192,16 @@ def cmd_run(args):
             at_min_len=int(fm_cfg.get("at_min_len", 500)),
             expected_length=fm_cfg.get("expected_length"),
         )
-        print(f"[7/7] Final molecule: {fm_out}")
+        print(f"[8/8] Final molecule: {fm_out}")
     else:
-        print("[7/7] Final molecule preparation: disabled")
+        print("[8/8] Final molecule preparation: disabled")
 
     print("\nMain outputs:")
     print(f"  {logs / 'tool_check.tsv'}")
+    if polish_dir is not None:
+        step_name = safe_get(config, ["output", "step_dirs", "polish"], "01_polish")
+        print(f"  {root / step_name / 'audit_log.jsonl'}")
+        print(f"  {root / step_name / 'polished.fasta'}")
     print(f"  {root / '05_refinement' / 'refined.gb'}")
     print(f"  {root / '05_refinement' / 'expected_gene_set.tsv'}")
     print(f"  {root / '05_refinement' / 'added_features.tsv'}")
@@ -199,6 +239,12 @@ def build_parser():
     p_run = sub.add_parser("run", help="Run initial all-in-one diagnostic workflow")
     p_run.add_argument("--config", required=True)
     p_run.set_defaults(func=cmd_run)
+
+    p_pol = sub.add_parser("polish", help="Polish raw assembly FASTA with HiFi and/or Illumina reads")
+    p_pol.add_argument("--config", required=True)
+    p_pol.add_argument("--input", default=None,
+                       help="Raw assembly FASTA (overrides polish.assembly_fasta in config)")
+    p_pol.set_defaults(func=cmd_polish)
 
     p_fm = sub.add_parser("final-molecule", help="Prepare final GenBank/FASTA and annotate A+T-rich region")
     p_fm.add_argument("--config", required=True)

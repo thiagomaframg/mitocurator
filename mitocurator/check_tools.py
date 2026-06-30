@@ -66,6 +66,19 @@ def check_tools(config: dict, outdir: Path):
             detail = str(e)
         rows.append(["mitofinder", status, mode, detail])
 
+    illum_polish = (safe_get(config, ["polish", "illumina"], None) or {})
+    if illum_polish:
+        bwa2 = which_or_path("bwa-mem2")
+        bwa  = which_or_path("bwa")
+        if bwa2:
+            rows.append(["bwa-mem2", "OK", "bwa-mem2", bwa2])
+        elif bwa:
+            rows.append(["bwa-mem2", "MISSING", "bwa-mem2", "."])
+            rows.append(["bwa", "OK (fallback)", "bwa", bwa])
+        else:
+            rows.append(["bwa-mem2", "MISSING", "bwa-mem2", "."])
+            rows.append(["bwa",      "MISSING",  "bwa",      "."])
+
     outfile = outdir / "tool_check.tsv"
     with open(outfile, "w", encoding="utf-8") as f:
         f.write("tool\tstatus\tconfigured\tresolved_or_detail\n")
