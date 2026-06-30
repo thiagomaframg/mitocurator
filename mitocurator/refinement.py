@@ -116,32 +116,208 @@ def summarize_expected_gene_set(record, out_tsv: Path):
                 out.write(f"{gene}\t{gtype}\t{status}\t{c}\t{'.' if c else 'not detected in current annotation'}\n")
 
 
-def add_at_rich_region(record, min_len=500, min_at=75.0):
+def _normalize_trna_name(name: str) -> str:
+    return name.lower().replace("trna", "").replace("-", "").replace("_", "").strip()
+
+
+def _find_trna(record, name: str):
+    """Find a tRNA feature matching name; case-insensitive, ignores 'tRNA' prefix and separators."""
+    norm = _normalize_trna_name(name)
+    for f in record.features:
+        if f.type != "tRNA":
+            continue
+        for qual in ("gene", "product", "note"):
+            for v in f.qualifiers.get(qual, []):
+                if _normalize_trna_name(v) == norm:
+                    return f
+    return None
+
+
+def _gaps_adjacent_to(gaps, pos, tolerance=10):
+    """Return all gaps whose start0 or end0 is within tolerance bp of pos."""
+    return [g for g in gaps
+            if abs(g["start0"] - pos) <= tolerance or abs(g["end0"] - pos) <= tolerance]
+
+
+def _find_control_region_by_flanks(record, flanks, gaps):
+    """Locate the control region gap using tRNA flanking markers.
+
+    flanks is a list of [five_prime_name, three_prime_name] pairs, tried in order.
+    For Hymenoptera the canonical pair is ["tRNA-Ile", "tRNA-Gln"].
+    For vertebrates the typical pair is ["tRNA-Pro", "tRNA-Phe"] (D-loop context).
+    Other metazoan groups may use different pairs — check the relevant literature.
+
+    Strategy per pair:
+      - Both found: control region is the gap cleanly between them.
+      - Only one found: largest gap adjacent (≤10 bp) to that tRNA.
+      - Neither found: try next pair; return (None, None) if all pairs exhausted.
+
+    Returns (gap_dict, method_note) or (None, None).
+    """
+    for five_prime, three_prime in flanks:
+        t5 = _find_trna(record, five_prime)
+        t3 = _find_trna(record, three_prime)
+
+        if t5 is not None and t3 is not None:
+            e5 = int(t5.location.end)
+            s3 = int(t3.location.start)
+            e3 = int(t3.location.end)
+            s5 = int(t5.location.start)
+            for g in gaps:
+                if ((abs(g["start0"] - e5) <= 10 and abs(g["end0"] - s3) <= 10) or
+                        (abs(g["start0"] - e3) <= 10 and abs(g["end0"] - s5) <= 10)):
+                    return g, f"tRNA flanks: {five_prime} + {three_prime}"
+            # Flanks found but no single gap cleanly between them; fall to single-anchor.
+
+        if t3 is not None:
+            adj = _gaps_adjacent_to(gaps, int(t3.location.end)) + \
+                  _gaps_adjacent_to(gaps, int(t3.location.start))
+            adj = list({id(g): g for g in adj}.values())  # deduplicate
+            if adj:
+                # Selects the largest adjacent gap. Validated for M. capixaba (HiFi, Hymenoptera):
+                # control region (2136 bp) was unambiguously larger than the only other adjacent
+                # gap (29 bp, between rrnS and tRNA-Gln). If a future case presents multiple gaps
+                # of similar size near a single anchor, this choice becomes arbitrary — should be
+                # treated as ambiguous (confidence=low or rejection). Known limitation; not
+                # implemented, flagged for revision. See docs/mitocurator_dev_brief.md §Limitações.
+                return max(adj, key=lambda g: g["length"]), \
+                       f"tRNA flank: {three_prime} (single anchor; {five_prime} not found)"
+
+        if t5 is not None:
+            adj = _gaps_adjacent_to(gaps, int(t5.location.end)) + \
+                  _gaps_adjacent_to(gaps, int(t5.location.start))
+            adj = list({id(g): g for g in adj}.values())
+            if adj:
+                # Same "largest adjacent gap" heuristic — see comment above.
+                return max(adj, key=lambda g: g["length"]), \
+                       f"tRNA flank: {five_prime} (single anchor; {three_prime} not found)"
+
+    return None, None
+
+
+def _tandem_repeat_score(seq: str, block_size: int = 55, min_identity: float = 0.75,
+                         min_copies: int = 3) -> tuple[bool, dict]:
+    """Detect tandem repeats by pairwise comparison of non-overlapping blocks.
+
+    Splits seq into non-overlapping blocks of block_size bp, then for each block
+    counts how many other blocks have pairwise identity >= min_identity (including
+    itself, so the minimum count for a match is 1). Returns True if any block
+    finds >= min_copies similar blocks, i.e. the repeat unit appears >= min_copies
+    times in the candidate window.
+    """
+    seq = seq.upper()
+    n = len(seq)
+    if n < block_size * min_copies:
+        return False, {"max_copies_found": 0}
+    blocks = [seq[i:i + block_size] for i in range(0, n, block_size)
+              if i + block_size <= n]
+    if len(blocks) < min_copies:
+        return False, {"max_copies_found": 0}
+    max_copies = 0
+    for query in blocks:
+        copies = sum(
+            sum(a == b for a, b in zip(query, blk)) / block_size >= min_identity
+            for blk in blocks
+        )
+        if copies > max_copies:
+            max_copies = copies
+    return max_copies >= min_copies, {"max_copies_found": max_copies}
+
+
+def add_at_rich_region(record, min_len=500, min_at=75.0,
+                       control_region_flanks=None,
+                       repeat_block_size=55, repeat_min_identity=0.75, repeat_min_copies=3):
+    """Annotate the most likely mitochondrial control region as a misc_feature.
+
+    Detection uses three signals in priority order:
+
+    1. tRNA-flank detection (primary, biological prior):
+       control_region_flanks is a list of [five_prime_tRNA, three_prime_tRNA] name pairs
+       tried in order. The default ["tRNA-Ile", "tRNA-Gln"] is appropriate for Hymenoptera.
+       Vertebrates typically use ["tRNA-Pro", "tRNA-Phe"] (D-loop context). Other metazoan
+       groups may differ — consult the literature and set refinement.control_region_flanks
+       accordingly. If a flank pair locates the gap, confidence is "high" regardless of AT%.
+
+    2. Tandem repeat signal (secondary, discriminating):
+       Among AT-rich candidate gaps (AT >= min_at, length >= min_len), gaps with detectable
+       tandem repeats (~block_size bp units, >= min_copies copies at >= min_identity) are
+       preferred. Confidence is "high" when a repeat is detected.
+
+    3. AT% alone (fallback):
+       When neither flanks nor repeats give a high-confidence result, the most AT-rich
+       gap passing the length/AT filter is selected with confidence "low" (requires review).
+    """
     gaps = _intergenic_gaps(record)
     if not gaps:
         return None
-    best = max(gaps, key=lambda g: g["length"])
-    if best["length"] < min_len or best["at_content"] < min_at:
-        return None
+
+    # Stage 1: tRNA-flank detection (primary signal)
+    flank_gap = None
+    flank_method = None
+    if control_region_flanks:
+        flank_gap, flank_method = _find_control_region_by_flanks(record, control_region_flanks, gaps)
+
+    if flank_gap is not None:
+        best = flank_gap
+        # Run tandem repeat as supporting evidence on the flank-identified gap.
+        seq = (str(record.seq[best["start0"]:best["end0"]]) if not best["wrap"]
+               else str(record.seq[best["start0"]:] + record.seq[:best["end0"]]))
+        has_repeat, repeat_stats = _tandem_repeat_score(
+            seq, repeat_block_size, repeat_min_identity, repeat_min_copies
+        )
+        best["has_repeat"] = has_repeat
+        best["repeat_max_copies"] = repeat_stats.get("max_copies_found", 0)
+        confidence = "high"
+        repeat_note = " + tandem repeat signal" if has_repeat else " (no tandem repeat in assembly — likely collapsed)"
+        inference = f"MitoCurator: {flank_method}{repeat_note}"
+        note = "putative mitochondrial control region"
+    else:
+        # Stage 2+3: AT filter + tandem repeat fallback
+        candidates = [g for g in gaps if g["length"] >= min_len and g["at_content"] >= min_at]
+        if not candidates:
+            return None
+
+        for gap in candidates:
+            seq = (str(record.seq[gap["start0"]:gap["end0"]]) if not gap["wrap"]
+                   else str(record.seq[gap["start0"]:] + record.seq[:gap["end0"]]))
+            has_repeat, repeat_stats = _tandem_repeat_score(
+                seq, repeat_block_size, repeat_min_identity, repeat_min_copies
+            )
+            gap["has_repeat"] = has_repeat
+            gap["repeat_max_copies"] = repeat_stats.get("max_copies_found", 0)
+
+        high_conf = [g for g in candidates if g["has_repeat"]]
+        pool = high_conf if high_conf else candidates
+        best = max(pool, key=lambda g: g["at_content"])
+        confidence = "high" if best["has_repeat"] else "low"
+
+        if confidence == "high":
+            note = "putative mitochondrial control region"
+            inference = "MitoCurator: intergenic AT-rich scan + tandem repeat signal"
+        else:
+            note = ("putative AT-rich region; control region candidate — "
+                    "no tandem repeat detected, requires manual review")
+            inference = "MitoCurator: intergenic AT-rich scan only"
 
     s, e, n = best["start0"], best["end0"], len(record.seq)
-    loc = (CompoundLocation([FeatureLocation(s, n, strand=1), FeatureLocation(0, e, strand=1)]) if best["wrap"] else FeatureLocation(s, e, strand=1))
-    record.features.append(
-        SeqFeature(location=loc, type="misc_feature", qualifiers={
-            "note": ["putative AT-rich control region"],
-            "product": ["AT-rich region"],
-            "inference": ["predicted by MitoCurator intergenic-region scan"],
-        })
-    )
+    loc = (CompoundLocation([FeatureLocation(s, n, strand=1), FeatureLocation(0, e, strand=1)])
+           if best["wrap"] else FeatureLocation(s, e, strand=1))
+
+    record.features.append(SeqFeature(
+        location=loc, type="misc_feature",
+        qualifiers={"note": [note], "inference": [inference]},
+    ))
     return {
-        "seqid": record.id,
-        "start": s + 1,
-        "end": e,
-        "length": best["length"],
-        "at_content": best["at_content"],
-        "feature_type": "misc_feature",
-        "note": "putative AT-rich control region",
-        "between": "intergenic_largest",
+        "seqid":             record.id,
+        "start":             s + 1,
+        "end":               e,
+        "length":            best["length"],
+        "at_content":        best["at_content"],
+        "feature_type":      "misc_feature",
+        "note":              note,
+        "confidence":        confidence,
+        "repeat_max_copies": best.get("repeat_max_copies", 0),
+        "between":           "intergenic_scan",
     }
 
 
@@ -386,12 +562,27 @@ def refine_annotation(config, input_gb, outdir):
     min_len = int(safe_get(config, ["refinement", "at_rich_min_len"], 500))
     min_at = float(safe_get(config, ["refinement", "at_rich_min_at"], 75.0))
     annotate_at = bool(safe_get(config, ["refinement", "annotate_at_rich"], True))
-    added = add_at_rich_region(record, min_len=min_len, min_at=min_at) if annotate_at else None
+    repeat_block_size = int(safe_get(config, ["refinement", "at_rich_repeat_block_size"], 55))
+    repeat_min_identity = float(safe_get(config, ["refinement", "at_rich_repeat_min_identity"], 0.75))
+    repeat_min_copies = int(safe_get(config, ["refinement", "at_rich_repeat_min_copies"], 3))
+    # Default: Hymenoptera pair. Vertebrates: [["tRNA-Pro", "tRNA-Phe"]]. Set to [] to disable.
+    control_region_flanks = safe_get(config, ["refinement", "control_region_flanks"],
+                                     [["tRNA-Ile", "tRNA-Gln"]])
+    added = add_at_rich_region(
+        record, min_len=min_len, min_at=min_at,
+        control_region_flanks=control_region_flanks,
+        repeat_block_size=repeat_block_size,
+        repeat_min_identity=repeat_min_identity,
+        repeat_min_copies=repeat_min_copies,
+    ) if annotate_at else None
 
     with open(outdir / "added_features.tsv", "w", encoding="utf-8") as out:
-        out.write("seqid\tstart\tend\tlength\tat_content\tfeature_type\tnote\tbetween\n")
+        out.write("seqid\tstart\tend\tlength\tat_content\tfeature_type\tnote\tconfidence\trepeat_max_copies\tbetween\n")
         if added:
-            out.write("{seqid}\t{start}\t{end}\t{length}\t{at_content}\t{feature_type}\t{note}\t{between}\n".format(**added))
+            out.write(
+                "{seqid}\t{start}\t{end}\t{length}\t{at_content}\t{feature_type}\t"
+                "{note}\t{confidence}\t{repeat_max_copies}\t{between}\n".format(**added)
+            )
 
     if bool(safe_get(config, ["refinement", "find_missing_cds_candidates"], True)):
         find_missing_cds_candidates(config, record, expected_tsv, outdir / "missing_gene_candidates.tsv")
