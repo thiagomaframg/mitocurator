@@ -216,9 +216,17 @@ def run_final_molecule_preparation(
     _STANDARD_AT_NOTES = ["A+T-rich control region", "putative mitochondrial control region"]
 
     if existing_at_idx is not None:
-        # Reuse location from refinement; normalise notes to standard wording.
+        # Reuse location from refinement; normalise notes to standard wording,
+        # but preserve low-confidence notes verbatim — they carry an explicit
+        # "requires manual review" warning that must not be silently replaced.
         existing = non_source[existing_at_idx]
-        existing.qualifiers["note"] = _STANDARD_AT_NOTES
+        is_low_confidence = any(
+            "requires manual review" in n
+            for n in existing.qualifiers.get("note", [])
+        )
+        if not is_low_confidence:
+            existing.qualifiers["note"] = _STANDARD_AT_NOTES
+        # Never strip the inference qualifier — it is the evidence trail.
         wraps = len(existing.location.parts) > 1
         s0 = int(existing.location.start)
         e0 = int(existing.location.end)
