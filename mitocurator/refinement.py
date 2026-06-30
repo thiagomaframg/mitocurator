@@ -174,6 +174,12 @@ def _find_control_region_by_flanks(record, flanks, gaps):
                   _gaps_adjacent_to(gaps, int(t3.location.start))
             adj = list({id(g): g for g in adj}.values())  # deduplicate
             if adj:
+                # Selects the largest adjacent gap. Validated for M. capixaba (HiFi, Hymenoptera):
+                # control region (2136 bp) was unambiguously larger than the only other adjacent
+                # gap (29 bp, between rrnS and tRNA-Gln). If a future case presents multiple gaps
+                # of similar size near a single anchor, this choice becomes arbitrary — should be
+                # treated as ambiguous (confidence=low or rejection). Known limitation; not
+                # implemented, flagged for revision. See docs/mitocurator_dev_brief.md §Limitações.
                 return max(adj, key=lambda g: g["length"]), \
                        f"tRNA flank: {three_prime} (single anchor; {five_prime} not found)"
 
@@ -182,6 +188,7 @@ def _find_control_region_by_flanks(record, flanks, gaps):
                   _gaps_adjacent_to(gaps, int(t5.location.start))
             adj = list({id(g): g for g in adj}.values())
             if adj:
+                # Same "largest adjacent gap" heuristic — see comment above.
                 return max(adj, key=lambda g: g["length"]), \
                        f"tRNA flank: {five_prime} (single anchor; {three_prime} not found)"
 

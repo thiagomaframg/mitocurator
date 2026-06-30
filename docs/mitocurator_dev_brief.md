@@ -404,6 +404,61 @@ EOF
 
 ---
 
+---
+
+## Detecção da região controladora (`refinement.py → add_at_rich_region`)
+
+### Estratégia (três sinais em prioridade decrescente)
+
+1. **Flancos de tRNA** (sinal primário, prior biológico). Parâmetro de config
+   `refinement.control_region_flanks`: lista de pares `[tRNA_5prime, tRNA_3prime]`
+   tentados em ordem. Se um par localiza o gap, o resultado é `confidence=high`
+   independentemente do AT%.
+
+   | Grupo taxonômico | Par canônico de flancos |
+   |-----------------|------------------------|
+   | Hymenoptera (default) | `["tRNA-Ile", "tRNA-Gln"]` |
+   | Vertebrados (D-loop) | `["tRNA-Pro", "tRNA-Phe"]` |
+   | Outros metazoários | consultar literatura; ajustar no config |
+
+2. **Tandem repeat** (sinal secundário). Entre gaps candidatos com AT% ≥ threshold e
+   comprimento ≥ min_len, preferir gaps com repetições em tandem detectáveis
+   (~55 bp/unidade, ≥ 3 cópias, ≥ 75% identidade). `confidence=high` quando repeat
+   detectado, `confidence=low` (revisar manualmente) quando apenas AT%.
+
+3. **AT% isolado** (fallback final). `confidence=low`.
+
+### Caso de validação — *Melipona capixaba* (HiFi, Hymenoptera)
+
+- Entrada: `final_mitogenome.gb` (MitoFinder, pré-correção), 19506 bp.
+- Anchor disponível: tRNA-Gln em 12104..12172. tRNA-Ile ausente (MitoFinder
+  não anota tRNA-Ile em insetos; MiTFi necessário para anotação completa de tRNA).
+- Gaps adjacentes a tRNA-Gln: 12173..14308 (2136 bp, 77.7% AT) e 12075..12103
+  (29 bp, gap técnico entre rrnS e tRNA-Gln).
+- Resultado: região 12173..14308 detectada como `confidence=high` pelo critério
+  do maior gap adjacente.
+- Falso positivo eliminado: gap 4006..6309 (antisense de COX1/ND4, gerado por
+  anotação incorreta do MitoFinder que `local_consensus` corrige depois) não aparece
+  como candidato porque o fallback AT+repeat não é executado quando o flanco localiza
+  a região.
+
+### Limitação conhecida — anchor único com gaps de tamanho similar
+
+O critério "maior gap adjacente" é heurístico e foi validado apenas no caso
+*M. capixaba*, onde a diferença de tamanho entre os gaps é nítida (2136 vs. 29 bp).
+**Caso futuro de risco:** se um genoma tiver dois ou mais gaps de tamanho similar
+(ex.: ±200 bp entre si) adjacentes ao único anchor disponível, a seleção pelo maior
+se torna arbitrária e pode resultar em detecção incorreta sem qualquer aviso.
+
+O comportamento correto para esse cenário seria:
+- Classificar o resultado como `confidence=low` (ou rejeitar), e
+- Registrar a ambiguidade no audit log para revisão manual.
+
+**Não implementado.** Registrado aqui como item de revisão para quando um caso
+ambíguo for encontrado — não especular sobre implementação antes disso.
+
+---
+
 ## O que este módulo NÃO faz
 
 - Não aplica correções globais de VCF.
