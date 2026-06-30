@@ -1,0 +1,49 @@
+project:
+  name: Mcapixaba_test
+  organism: "Melipona capixaba"
+  topology: circular
+  genetic_code: 5
+  gb_division: INV
+  rotate_to: COX1
+
+input:
+  mitogenome: /home/thiagomafra/projetos/asf/capixaba/montagem/pipeasm_run1/pipeasm/results/Assembly/Mitogenome/Solo_Asm/final_mitogenome.gb
+  reference_gb: /home/thiagomafra/projetos/asf/scutellaris/Mscutellaris_mtDNA.gb
+
+output:
+  outdir: /home/thiagomafra/.claude/jobs/9a424642/tmp/mitocurator_test_suggest
+
+reads:
+  technology: hifi
+  hifi: /home/thiagomafra/projetos/asf/capixaba/montagem/pipeasm_run1/pipeasm/results/Trimming_QC/HiFi/Mcap_INMA.trimmed.fastq.gz
+
+refinement:
+  enabled: true
+  annotate_at_rich: true
+  at_rich_min_len: 500
+  at_rich_min_at: 75.0
+  find_missing_cds_candidates: true
+  find_cds_refinement_candidates: true
+  orf_min_nt: 150
+  cds_refinement_window: 300
+
+local_consensus:
+  enabled: true
+  mode: suggest
+  flank_bp: 200
+  min_mq: 20
+  min_depth: 5
+  maj_freq: 0.70
+  mafft_max_reads: 500
+  mafft_gap_col_threshold: 0.50
+  max_n_fraction: 0.05
+  completeness_min_ratio: 0.80
+  completeness_min_cov: 0.70
+  min_identity_pct: 70.0
+  min_read_pident: 75.0
+  min_bimodal_gap: 1.0
+  tblastn_evalue: 1.0e-5
+  shift_nt: 60
+  length_tol_frac: 0.15
+  max_stops_in_read: 0
+  threads: 8
