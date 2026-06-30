@@ -791,29 +791,45 @@ def _apply_to_record(record, gene: str, start0: int, end0: int, strand: int,
 
     target_gene    = _normalize_token(gene)
     target_updated = False
+    new_features: list = []
 
     for feat in record.features:
         fs      = int(feat.location.start)
         fe      = int(feat.location.end)
         fstrand = feat.location.strand
 
+        is_same_gene = (
+            feat.type in ("CDS", "gene")
+            and _normalize_token(
+                feat.qualifiers.get("gene", feat.qualifiers.get("product", [gene]))[0]
+            ) == target_gene
+        )
+
         if fe <= start0:
+            if not is_same_gene:
+                new_features.append(feat)
+            # else: stale same-gene annotation outside repair region — drop it
             continue
 
         if fs >= end0:
-            feat.location = FeatureLocation(fs + delta, fe + delta, strand=fstrand)
+            if not is_same_gene:
+                feat.location = FeatureLocation(fs + delta, fe + delta, strand=fstrand)
+                new_features.append(feat)
+            # else: stale same-gene annotation outside repair region — drop it
             continue
 
-        is_target = (_normalize_token(
-            feat.qualifiers.get("gene", feat.qualifiers.get("product", [gene]))[0]
-        ) == target_gene and feat.type == "CDS")
+        is_target = is_same_gene and feat.type == "CDS"
 
         if is_target:
             feat.location = FeatureLocation(start0, start0 + new_len, strand=fstrand)
             target_updated = True
+            new_features.append(feat)
         else:
             new_fe = (fe + delta) if fe > end0 else fe
             feat.location = FeatureLocation(fs, new_fe, strand=fstrand)
+            new_features.append(feat)
+
+    record.features = new_features
 
     if prob_type == "MISSING" and not target_updated:
         record.features.append(SeqFeature(
