@@ -197,25 +197,59 @@ def run_final_molecule_preparation(
         if feat.type == "CDS":
             feat.qualifiers["transl_table"] = [str(tt)]
 
-    # 5. Detect A+T-rich region and annotate as misc_feature
-    at_region = detect_at_rich_region(str(record.seq), at_window_size, at_min_pct, at_min_len)
-    if at_region:
-        s0 = at_region["start"] - 1
-        e0 = at_region["end"]
-        if at_region["wraps_around_origin"] == "yes":
-            loc = (FeatureLocation(s0, len(record.seq), strand=1)
-                   + FeatureLocation(0, e0, strand=1))
-        else:
-            loc = FeatureLocation(s0, e0, strand=1)
-        at_feat = SeqFeature(
-            location=loc,
-            type="misc_feature",
-            qualifiers={"note": [
-                "A+T-rich control region",
-                "putative mitochondrial control region",
-            ]},
+    # 5. Annotate A+T-rich region as misc_feature.
+    # If refinement already placed one (more accurate: gene-boundary-aware), keep its
+    # location and normalise the notes. Only fall back to sliding-window detection when
+    # no existing annotation is found.
+    _AT_RICH_KEYWORDS = {"at-rich", "at rich", "a+t-rich", "control region"}
+
+    def _is_at_rich_feature(feat) -> bool:
+        if feat.type != "misc_feature":
+            return False
+        notes = " ".join(feat.qualifiers.get("note", [])).lower()
+        return any(kw in notes for kw in _AT_RICH_KEYWORDS)
+
+    existing_at_idx = next(
+        (i for i, f in enumerate(non_source) if _is_at_rich_feature(f)), None
+    )
+
+    _STANDARD_AT_NOTES = ["A+T-rich control region", "putative mitochondrial control region"]
+
+    if existing_at_idx is not None:
+        # Reuse location from refinement; normalise notes to standard wording.
+        existing = non_source[existing_at_idx]
+        existing.qualifiers["note"] = _STANDARD_AT_NOTES
+        wraps = len(existing.location.parts) > 1
+        s0 = int(existing.location.start)
+        e0 = int(existing.location.end)
+        region_seq = (str(record.seq) + str(record.seq))[s0:e0] if not wraps else ""
+        at_pct = (
+            round(sum(1 for b in region_seq.upper() if b in {"A", "T"}) / len(region_seq) * 100, 3)
+            if region_seq else None
         )
-        non_source.append(at_feat)
+        at_region = {
+            "start": s0 + 1,
+            "end": e0,
+            "length": e0 - s0,
+            "at_percent": at_pct,
+            "wraps_around_origin": "yes" if wraps else "no",
+        }
+    else:
+        at_region = detect_at_rich_region(str(record.seq), at_window_size, at_min_pct, at_min_len)
+        if at_region:
+            s0 = at_region["start"] - 1
+            e0 = at_region["end"]
+            if at_region["wraps_around_origin"] == "yes":
+                loc = (FeatureLocation(s0, len(record.seq), strand=1)
+                       + FeatureLocation(0, e0, strand=1))
+            else:
+                loc = FeatureLocation(s0, e0, strand=1)
+            at_feat = SeqFeature(
+                location=loc,
+                type="misc_feature",
+                qualifiers={"note": _STANDARD_AT_NOTES},
+            )
+            non_source.append(at_feat)
 
     record.features = [source_feat] + non_source
 
@@ -235,14 +269,14 @@ def run_final_molecule_preparation(
         ["feature_type", "gene", "product", "start", "end", "strand", "length_nt", "qualifiers_summary"],
     )
 
+    _AT_TSV_FIELDS = ["start", "end", "length", "at_percent", "wraps_around_origin"]
     if at_region:
-        at_rows: List[Dict[str, Any]] = [at_region]
-        at_fields = list(at_region.keys())
+        at_rows: List[Dict[str, Any]] = [{k: (at_region.get(k) if at_region.get(k) is not None else ".")
+                                          for k in _AT_TSV_FIELDS}]
     else:
         at_rows = [{"start": ".", "end": ".", "length": 0, "at_percent": ".",
-                    "wraps_around_origin": "no", "status": "not detected"}]
-        at_fields = list(at_rows[0].keys())
-    _write_tsv(at_out, at_rows, at_fields)
+                    "wraps_around_origin": "no"}]
+    _write_tsv(at_out, at_rows, _AT_TSV_FIELDS)
 
     # 7. Markdown report
     cds_count  = sum(1 for f in record.features if f.type == "CDS")
@@ -266,9 +300,11 @@ def run_final_molecule_preparation(
         match = "MATCH" if len(record.seq) == int(expected_length) else "MISMATCH"
         lines.append(f"- Expected length: {expected_length} bp -> {match}")
     if at_region:
+        at_pct_str = (f", AT={at_region['at_percent']}%"
+                      if at_region.get("at_percent") is not None else "")
         lines.extend([
             f"- A+T-rich/control region: {at_region['start']}..{at_region['end']} "
-            f"(length={at_region['length']} bp, AT={at_region['at_percent']}%)",
+            f"(length={at_region['length']} bp{at_pct_str})",
             f"- Wraps around origin: {at_region['wraps_around_origin']}",
         ])
     else:
