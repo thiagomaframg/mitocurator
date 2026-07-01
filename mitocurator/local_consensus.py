@@ -126,19 +126,30 @@ def repair_cds_local_consensus(
             audit_entries.append(entry)
             continue
 
-        # ── [0] tblastn coordinate refinement ────────────────────────────────
-        prot_fa     = gene_dir / f"{gene}_ref.fa"
-        tblastn_tsv = gene_dir / "tblastn.tsv"
-        prot_seq    = ref_proteins[gene].rstrip("*")
+        # ── [0] tblastn coordinate refinement (skipped for MISSING genes) ───
+        prot_fa  = gene_dir / f"{gene}_ref.fa"
+        prot_seq = ref_proteins[gene].rstrip("*")
         prot_fa.write_text(f">{gene}\n{prot_seq}\n")
-        tblastn_cmd = _run_tblastn(prot_fa, genome_fa, genetic_code, tblastn_tsv, threads, tblastn_evalue)
-        coords = _best_tblastn_coords(tblastn_tsv, len(prot_seq))
-        coords_confirmed = coords is not None
-        if coords_confirmed:
-            new_s0, new_e0, new_strand = coords
-            start0 = max(0, new_s0)
-            end0   = min(len(record.seq), new_e0)
-            strand = new_strand
+
+        if prob_type == "MISSING":
+            # Refinement already confirmed coordinates via its own tblastn;
+            # assembly evidence is often insufficient for divergent genes.
+            # Reads are the primary evidence source (reads_recovery path).
+            coords_confirmed = True
+            cmds = []
+        else:
+            tblastn_tsv = gene_dir / "tblastn.tsv"
+            tblastn_cmd = _run_tblastn(
+                prot_fa, genome_fa, genetic_code, tblastn_tsv, threads, tblastn_evalue
+            )
+            coords = _best_tblastn_coords(tblastn_tsv, len(prot_seq))
+            coords_confirmed = coords is not None
+            if coords_confirmed:
+                new_s0, new_e0, new_strand = coords
+                start0 = max(0, new_s0)
+                end0   = min(len(record.seq), new_e0)
+                strand = new_strand
+            cmds = [tblastn_cmd]
 
         # ── [1] extract assembly region ───────────────────────────────────────
         target_fa = gene_dir / "region.fa"
@@ -162,7 +173,7 @@ def repair_cds_local_consensus(
                 Path(str(bam_path) + ".bai").unlink(missing_ok=True)
             cmds_map = _map_and_filter(reads_paths, preset, target_fa, bam_path, threads, min_mq)
             coord_cache.write_text(cur_coord)
-        cmds = [tblastn_cmd] + cmds_map
+        cmds = cmds + cmds_map
 
         # ── [3] extract mapped reads → reads_candidate.fa ────────────────────
         reads_fa = gene_dir / "reads_candidate.fa"
@@ -191,7 +202,14 @@ def repair_cds_local_consensus(
         n_hits = len(hit_regions)
 
         if n_hits == 0:
-            entry = _make_entry(gene, prob_type, "SKIPPED_NO_TBLASTN_HIT_IN_READS", versions, cmds,
+            # For MISSING genes: no read evidence means the gene is likely truly
+            # absent or too divergent — distinct from INTERNAL_STOP which already
+            # has confirmed assembly coordinates before reaching this check.
+            no_hit_action = (
+                "REJECTED_NO_READ_EVIDENCE" if prob_type == "MISSING"
+                else "SKIPPED_NO_TBLASTN_HIT_IN_READS"
+            )
+            entry = _make_entry(gene, prob_type, no_hit_action, versions, cmds,
                                 stops_bef, stops_bef,
                                 evidence_extra={
                                     "region": region_label,
@@ -315,6 +333,7 @@ def repair_cds_local_consensus(
                 "assembly_coords_confirmed": coords_confirmed,
                 "ref_protein_identity_pct": val.get("identity_pct"),
                 "ref_protein_coverage_pct": val.get("coverage_pct"),
+                **({"source": "reads_recovery"} if prob_type == "MISSING" else {}),
                 **pident_info,
             },
             candidate={
