@@ -1,7 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
 import datetime
-import json
 import subprocess
 
 from Bio import SeqIO
@@ -55,30 +54,28 @@ def _hit_to_feature(hit: dict) -> SeqFeature:
     return feat
 
 
-def _count_trnas(record) -> int:
-    return sum(1 for f in record.features if f.type == 'tRNA')
+def _trna_is_stop(feat) -> bool:
+    """True if this tRNA feature is a tRNA-Stop (ARWEN false positive, anticodon TCA)."""
+    product = feat.qualifiers.get('product', [''])[0].lower()
+    return 'stop' in product
 
 
-def _has_trna_stop(record) -> bool:
-    for feat in record.features:
-        if feat.type != 'tRNA':
-            continue
-        product = feat.qualifiers.get('product', [''])[0].lower()
-        if 'stop' in product:
-            return True
-    return False
+def _trna_is_artifact(feat) -> bool:
+    """True if this tRNA would be flagged TRNA_LENGTH_ARTIFACT by gene_qc (< 50 or > 200 nt)."""
+    length = int(feat.location.end) - int(feat.location.start)
+    return length < 50 or length > 200
 
 
-def _remove_trna_features(record) -> None:
-    def _is_trna(feat) -> bool:
-        if feat.type == 'tRNA':
-            return True
-        if feat.type == 'gene':
-            gene = feat.qualifiers.get('gene', [''])[0].lower()
-            product = feat.qualifiers.get('product', [''])[0].lower()
-            return gene.startswith('trna') or product.startswith('trna')
-        return False
-    record.features = [f for f in record.features if not _is_trna(f)]
+def _product_to_aa(product: str) -> str:
+    """Extract three-letter amino acid from tRNA product name.
+
+    'tRNA-Phe' → 'Phe', 'tRNA-Leu2' → 'Leu', 'tRNA-Stop' → 'Stop'.
+    Returns empty string if product is not a recognisable tRNA name.
+    """
+    p = product.strip()
+    if not p.lower().startswith('trna-'):
+        return ''
+    return p[5:].rstrip('0123456789')
 
 
 def apply_mitfi_fallback(
@@ -88,13 +85,23 @@ def apply_mitfi_fallback(
     outdir: Path,
     expected_trna_count: int = 22,
 ) -> dict:
-    """Check trigger conditions; if met, replace tRNA features with MiTFi predictions.
+    """Merge ARWEN and MiTFi tRNA predictions.
+
+    Logic:
+    1. Build arwen_valid: keep ARWEN tRNAs that are neither tRNA-Stop nor
+       TRNA_LENGTH_ARTIFACT (< 50 or > 200 nt). Remove the rest from the record.
+    2. Identify amino acids absent from arwen_valid.
+    3. Run MiTFi; for each MiTFi hit whose amino acid is absent from arwen_valid,
+       add the MiTFi feature.  ARWEN always takes priority over MiTFi for covered
+       amino acids.
+    4. Trigger is unchanged: tRNA-Stop present OR total count < expected_trna_count.
 
     Returns audit dict with keys: mitfi_triggered, trigger_reason, trnas_before,
-    trnas_after, trnas_replaced, timestamp.
+    trnas_after, arwen_kept, arwen_removed (list), mitfi_added (list).
     """
-    trnas_before = _count_trnas(record)
-    has_stop = _has_trna_stop(record)
+    all_trnas = [f for f in record.features if f.type == 'tRNA']
+    trnas_before = len(all_trnas)
+    has_stop = any(_trna_is_stop(f) for f in all_trnas)
     below_expected = trnas_before < expected_trna_count
 
     triggered = has_stop or below_expected
@@ -105,20 +112,56 @@ def apply_mitfi_fallback(
         reasons.append(f'tRNA count {trnas_before} < expected {expected_trna_count}')
 
     audit: dict = {
-        'timestamp':      datetime.datetime.utcnow().isoformat(),
-        'step':           'mitfi_trna_fallback',
+        'timestamp':       datetime.datetime.utcnow().isoformat(),
+        'step':            'mitfi_trna_fallback',
         'mitfi_triggered': triggered,
-        'trigger_reason': '; '.join(reasons) if reasons else None,
-        'trnas_before':   trnas_before,
-        'trnas_after':    trnas_before,
-        'trnas_replaced': 0,
+        'trigger_reason':  '; '.join(reasons) if reasons else None,
+        'trnas_before':    trnas_before,
+        'trnas_after':     trnas_before,
+        'arwen_kept':      trnas_before,
+        'arwen_removed':   [],
+        'mitfi_added':     [],
     }
 
     if not triggered:
         return audit
 
-    # Write FASTA extracted from the annotated record for MiTFi input.
-    # Using the record sequence guarantees coordinate compatibility with the GB annotations.
+    # ── Step 1: identify ARWEN tRNAs to remove ───────────────────────────────
+    arwen_removed_info: list[dict] = []
+    products_to_remove: set[str] = set()
+
+    for feat in all_trnas:
+        product = feat.qualifiers.get('product', [''])[0]
+        if _trna_is_stop(feat):
+            products_to_remove.add(product)
+            arwen_removed_info.append({'product': product, 'reason': 'tRNA-Stop'})
+        elif _trna_is_artifact(feat):
+            length = int(feat.location.end) - int(feat.location.start)
+            products_to_remove.add(product)
+            arwen_removed_info.append({
+                'product': product, 'length_nt': length, 'reason': 'TRNA_LENGTH_ARTIFACT',
+            })
+
+    def _flagged(feat) -> bool:
+        """True for tRNA features and their gene wrappers that should be removed."""
+        if feat.type == 'tRNA':
+            return feat.qualifiers.get('product', [''])[0] in products_to_remove
+        if feat.type == 'gene':
+            return (feat.qualifiers.get('gene', [''])[0] in products_to_remove
+                    or feat.qualifiers.get('product', [''])[0] in products_to_remove)
+        return False
+
+    record.features = [f for f in record.features if not _flagged(f)]
+
+    # Amino acids still covered after filtering (arwen_valid)
+    arwen_valid_trnas = [f for f in record.features if f.type == 'tRNA']
+    arwen_aas: set[str] = set()
+    for feat in arwen_valid_trnas:
+        aa = _product_to_aa(feat.qualifiers.get('product', [''])[0])
+        if aa:
+            arwen_aas.add(aa)
+
+    # ── Step 2-3: run MiTFi, add only amino acids absent from arwen_valid ────
     fasta_path = outdir / 'assembly_for_mitfi.fasta'
     SeqIO.write(record, str(fasta_path), 'fasta')
 
@@ -137,13 +180,29 @@ def apply_mitfi_fallback(
         fh.write(result.stdout)
 
     hits = _parse_mitfi_fasta(result.stdout)
-    new_features = [_hit_to_feature(h) for h in hits]
 
-    _remove_trna_features(record)
-    record.features.extend(new_features)
+    mitfi_added_info: list[dict] = []
+    mitfi_seen_aas: set[str] = set()
+
+    for hit in hits:
+        aa = _AA_TO_THREE.get(hit['aa'], hit['aa'])
+        if aa in arwen_aas or aa in mitfi_seen_aas:
+            continue
+        record.features.append(_hit_to_feature(hit))
+        mitfi_seen_aas.add(aa)
+        mitfi_added_info.append({
+            'product':   f"tRNA-{aa}",
+            'anticodon': hit['anticodon'],
+            'evalue':    hit['evalue'],
+            'position':  f"{hit['start']}..{hit['end']}",
+        })
+
     record.features.sort(key=lambda f: int(f.location.start))
 
-    audit['trnas_after'] = len(new_features)
-    audit['trnas_replaced'] = trnas_before
+    trnas_after = sum(1 for f in record.features if f.type == 'tRNA')
+    audit['trnas_after']    = trnas_after
+    audit['arwen_kept']     = len(arwen_valid_trnas)
+    audit['arwen_removed']  = arwen_removed_info
+    audit['mitfi_added']    = mitfi_added_info
 
     return audit
