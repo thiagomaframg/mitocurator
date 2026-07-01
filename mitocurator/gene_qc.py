@@ -79,6 +79,14 @@ def summarize_features(record, genetic_code: int):
             elif internal:
                 row["status"] = "PROBLEM"
                 row["decision_hint"] = "CHECK_INTERNAL_STOP"
+        elif feat.type == "tRNA":
+            if length_nt < 50 or length_nt > 200:
+                row["status"] = "TRNA_LENGTH_ARTIFACT"
+                row["decision_hint"] = "TRNA_LENGTH_ARTIFACT"
+                row["comment"] = (
+                    f"tRNA length {length_nt} nt outside expected 60-90 nt range; "
+                    "likely circular wrap artifact"
+                )
         rows.append(row)
     return pd.DataFrame(rows)
 
