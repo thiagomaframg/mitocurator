@@ -144,7 +144,8 @@ def cmd_run(args):
             mitfi_dir = ensure_dir(root / "03_mitfi_fallback")
             record_mitfi, fmt_mitfi = read_record(annotated_gb)
             audit_mitfi = apply_mitfi_fallback(
-                record_mitfi, mitfi_jar, genetic_code, mitfi_dir, expected_trna
+                record_mitfi, mitfi_jar, genetic_code, mitfi_dir, expected_trna,
+                source_gb=annotated_gb,
             )
             with open(mitfi_dir / "audit.json", "w", encoding="utf-8") as fh:
                 json.dump(audit_mitfi, fh, indent=2)
