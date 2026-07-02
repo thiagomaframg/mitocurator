@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 import datetime
+import re
 import subprocess
 
 from Bio import SeqIO
@@ -66,6 +67,88 @@ def _trna_is_artifact(feat) -> bool:
     return length < 50 or length > 200
 
 
+def _feature_score(feat) -> float | None:
+    """Numeric score from a tRNA feature's note qualifier (MiTFi hits only)."""
+    note = feat.qualifiers.get('note', [''])[0]
+    for token in note.split(';'):
+        token = token.strip()
+        if token.startswith('score='):
+            try:
+                return float(token.split('=', 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+_ARWEN_LINE_RE = re.compile(
+    r'mtRNA-\S+\s+(c?)\[(\d+),\s*(\d+)\]\s+\d+\s+\(([A-Za-z]+)\)'
+)
+
+
+def _find_arwen_file(source_gb) -> Path | None:
+    """Locate MitoFinder's raw ARWEN output sibling to *source_gb*.
+
+    MitoFinder writes  <run_dir>/<run_name>_arwen/<contig>.arwen
+    alongside          <run_dir>/<run_name>_MitoFinder_arwen_Final_Results/<contig>.gb
+    The GenBank conversion MitoFinder performs on ARWEN's hits drops the
+    anticodon column, so it has to be recovered from this raw file. Returns
+    None if it can't be located (e.g. MitoFinder was run with a different
+    tRNA finder) — callers must then skip anticodon-aware logic.
+    """
+    if source_gb is None:
+        return None
+    source_gb = Path(source_gb)
+    run_dir = source_gb.parent.parent
+    candidate = run_dir / f"{run_dir.name}_arwen" / f"{source_gb.stem}.arwen"
+    return candidate if candidate.exists() else None
+
+
+def _parse_arwen_file(path: Path) -> dict[tuple[int, int, int], str]:
+    """Map (start0, end0, strand) -> lowercase anticodon from ARWEN's raw output.
+
+    Origin-wrapping hits (1-based start > end) are skipped: they can't be
+    matched against a linear GenBank feature location, and in practice they
+    are already filtered out upstream as TRNA_LENGTH_ARTIFACT.
+    """
+    lookup: dict[tuple[int, int, int], str] = {}
+    for line in path.read_text().splitlines():
+        m = _ARWEN_LINE_RE.search(line)
+        if not m:
+            continue
+        minus, start1, end1, anticodon = m.groups()
+        start1, end1 = int(start1), int(end1)
+        if start1 > end1:
+            continue
+        strand = -1 if minus == 'c' else 1
+        lookup[(start1 - 1, end1, strand)] = anticodon.lower()
+    return lookup
+
+
+def _attach_arwen_anticodons(record, source_gb) -> int:
+    """Annotate ARWEN-derived tRNA features in *record* with qualifiers['anticodon'].
+
+    Matches raw ARWEN hits (sibling to *source_gb*) to tRNA features by exact
+    (start, end, strand). Returns the number of features annotated; a feature
+    left unmatched (or if the .arwen file can't be found at all) simply has
+    no 'anticodon' qualifier — callers must treat that as "unknown", not
+    "no duplicate".
+    """
+    arwen_file = _find_arwen_file(source_gb)
+    if arwen_file is None:
+        return 0
+    lookup = _parse_arwen_file(arwen_file)
+    n_matched = 0
+    for feat in record.features:
+        if feat.type != 'tRNA':
+            continue
+        key = (int(feat.location.start), int(feat.location.end), feat.location.strand)
+        anticodon = lookup.get(key)
+        if anticodon:
+            feat.qualifiers['anticodon'] = [anticodon]
+            n_matched += 1
+    return n_matched
+
+
 def _product_to_aa(product: str) -> str:
     """Extract three-letter amino acid from tRNA product name.
 
@@ -84,12 +167,20 @@ def apply_mitfi_fallback(
     genetic_code: int,
     outdir: Path,
     expected_trna_count: int = 22,
+    source_gb=None,
 ) -> dict:
     """Merge ARWEN and MiTFi tRNA predictions.
 
     Logic:
     1. Build arwen_valid: keep ARWEN tRNAs that are neither tRNA-Stop nor
        TRNA_LENGTH_ARTIFACT (< 50 or > 200 nt). Remove the rest from the record.
+    1b. Deduplicate ARWEN over-predictions: multiple tRNA calls for the same
+       amino acid AND same anticodon (recovered from MitoFinder's raw ARWEN
+       file, sibling to source_gb) are true duplicates — keep the best-scoring
+       one, or the first by position. Amino acid alone is NOT enough to group
+       on: Leu and Ser legitimately have two isoacceptor tRNAs each (distinct
+       anticodons), so those must never be collapsed. A tRNA whose anticodon
+       can't be recovered is left untouched by this step.
     2. Identify amino acids absent from arwen_valid.
     3. Run MiTFi; for each MiTFi hit whose amino acid is absent from arwen_valid,
        add the MiTFi feature.  ARWEN always takes priority over MiTFi for covered
@@ -97,8 +188,11 @@ def apply_mitfi_fallback(
     4. Trigger is unchanged: tRNA-Stop present OR total count < expected_trna_count.
 
     Returns audit dict with keys: mitfi_triggered, trigger_reason, trnas_before,
-    trnas_after, arwen_kept, arwen_removed (list), mitfi_added (list).
+    trnas_after, arwen_kept, arwen_removed (list), arwen_deduplicated (dict),
+    dedup_skipped_no_anticodon (list), mitfi_added (list).
     """
+    _attach_arwen_anticodons(record, source_gb)
+
     all_trnas = [f for f in record.features if f.type == 'tRNA']
     trnas_before = len(all_trnas)
     has_stop = any(_trna_is_stop(f) for f in all_trnas)
@@ -120,6 +214,8 @@ def apply_mitfi_fallback(
         'trnas_after':     trnas_before,
         'arwen_kept':      trnas_before,
         'arwen_removed':   [],
+        'arwen_deduplicated': {'n': 0, 'amino_acids': [], 'removed': []},
+        'dedup_skipped_no_anticodon': [],
         'mitfi_added':     [],
     }
 
@@ -155,6 +251,64 @@ def apply_mitfi_fallback(
 
     # Amino acids still covered after filtering (arwen_valid)
     arwen_valid_trnas = [f for f in record.features if f.type == 'tRNA']
+
+    # ── Step 1b: deduplicate ARWEN over-predictions — multiple tRNA calls for
+    # the SAME amino acid AND SAME anticodon (true duplicates, e.g. tRNA-Leu2
+    # x4 all reading anticodon 'taa'). Grouping by amino acid alone would
+    # wrongly collapse legitimate isoacceptor pairs (Leu-UUR/taa vs
+    # Leu-CUN/tag, same for Ser) into one. A feature whose anticodon
+    # couldn't be recovered is never removed here — left visibly duplicate
+    # is safer than discarding the wrong copy. ─────────────────────────────
+    by_aa_anticodon: dict[tuple[str, str], list] = {}
+    skipped_no_anticodon: list[dict] = []
+    for feat in arwen_valid_trnas:
+        product = feat.qualifiers.get('product', [''])[0]
+        aa = _product_to_aa(product)
+        if not aa:
+            continue
+        anticodon = feat.qualifiers.get('anticodon', [None])[0]
+        if anticodon is None:
+            skipped_no_anticodon.append({
+                'product': product,
+                'start':   int(feat.location.start),
+                'end':     int(feat.location.end),
+            })
+            continue
+        by_aa_anticodon.setdefault((aa, anticodon), []).append(feat)
+
+    dedup_removed_info: list[dict] = []
+    dedup_spans: set[tuple[int, int, str]] = set()
+    for (aa, anticodon), feats in by_aa_anticodon.items():
+        if len(feats) <= 1:
+            continue
+        ordered = sorted(
+            feats,
+            key=lambda f: (
+                _feature_score(f) is None,
+                -(_feature_score(f) or 0.0),
+                int(f.location.start),
+            ),
+        )
+        for feat in ordered[1:]:
+            product = feat.qualifiers.get('product', [''])[0]
+            dedup_spans.add((int(feat.location.start), int(feat.location.end), product))
+            dedup_removed_info.append({
+                'product':   product,
+                'anticodon': anticodon,
+                'start':     int(feat.location.start),
+                'end':       int(feat.location.end),
+            })
+
+    if dedup_spans:
+        def _is_dedup_span(f) -> bool:
+            if f.type not in ('tRNA', 'gene'):
+                return False
+            product = f.qualifiers.get('gene', f.qualifiers.get('product', ['']))[0]
+            return (int(f.location.start), int(f.location.end), product) in dedup_spans
+
+        record.features = [f for f in record.features if not _is_dedup_span(f)]
+        arwen_valid_trnas = [f for f in record.features if f.type == 'tRNA']
+
     arwen_aas: set[str] = set()
     for feat in arwen_valid_trnas:
         aa = _product_to_aa(feat.qualifiers.get('product', [''])[0])
@@ -200,9 +354,15 @@ def apply_mitfi_fallback(
     record.features.sort(key=lambda f: int(f.location.start))
 
     trnas_after = sum(1 for f in record.features if f.type == 'tRNA')
-    audit['trnas_after']    = trnas_after
-    audit['arwen_kept']     = len(arwen_valid_trnas)
-    audit['arwen_removed']  = arwen_removed_info
-    audit['mitfi_added']    = mitfi_added_info
+    audit['trnas_after']         = trnas_after
+    audit['arwen_kept']          = len(arwen_valid_trnas)
+    audit['arwen_removed']       = arwen_removed_info
+    audit['arwen_deduplicated']  = {
+        'n':            len(dedup_removed_info),
+        'amino_acids':  sorted({aa for (aa, ac), feats in by_aa_anticodon.items() if len(feats) > 1}),
+        'removed':      dedup_removed_info,
+    }
+    audit['dedup_skipped_no_anticodon'] = skipped_no_anticodon
+    audit['mitfi_added']         = mitfi_added_info
 
     return audit
