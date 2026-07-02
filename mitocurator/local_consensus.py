@@ -38,6 +38,12 @@ _MINIMAP2_PRESETS: dict[str, str] = {
 
 # ── Public ─────────────────────────────────────────────────────────────────────
 
+def _problem_start0(p: dict) -> int:
+    """0-based start used to order problems for sequential apply (see loop below)."""
+    start1 = int(p.get("start", p.get("old_start", p.get("candidate_start", 1))))
+    return start1 - 1
+
+
 def repair_cds_local_consensus(
     config: dict,
     record,
@@ -98,6 +104,13 @@ def repair_cds_local_consensus(
 
     genome_fa = step_dir / "genome.fa"
     genome_fa.write_text(f">{record.id}\n{str(record.seq).upper()}\n")
+
+    # Apply downstream-most genes first: _apply_to_record only shifts the
+    # coordinates of features located at/after the edited region, so a
+    # candidate's own start0/end0 (computed once, before any edits in this
+    # loop) stays valid as long as every edit already applied lies further
+    # downstream. Processing in decreasing start0 order guarantees that.
+    problems = sorted(problems, key=_problem_start0, reverse=True)
 
     for p in problems:
         gene     = p["gene"]
